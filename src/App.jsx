@@ -100,14 +100,14 @@ export default function IPOPoolManager() {
         transfers,
       };
 
-        // Save to cloud
-        const { error } = await supabase.from(IPO_PROJECTS_TABLE).upsert({
-          id: projectData.id,
-          name: projectName,
-          ipo_details: projectData.ipoDetails,
-          participants: projectData.participants,
-          transfers: projectData.transfers,
-        });
+      // Save to cloud
+      const { error } = await supabase.from(IPO_PROJECTS_TABLE).upsert({
+        id: projectData.id,
+        name: projectName,
+        ipo_details: projectData.ipoDetails,
+        participants: projectData.participants,
+        transfers: projectData.transfers,
+      });
 
       if (error) throw error;
 
@@ -128,14 +128,14 @@ export default function IPOPoolManager() {
       console.error("Error saving to cloud:", error);
       alert("Failed to save to cloud. Saving locally instead.");
 
-        // Fallback to local save
-        const projectData = {
-          id: currentProjectId || crypto.randomUUID(),
-          savedDate: new Date().toISOString(),
-          ipoDetails,
-          participants,
-          transfers,
-        };
+      // Fallback to local save
+      const projectData = {
+        id: currentProjectId || crypto.randomUUID(),
+        savedDate: new Date().toISOString(),
+        ipoDetails,
+        participants,
+        transfers,
+      };
 
       if (currentProjectId) {
         setSavedProjects(
@@ -381,8 +381,9 @@ export default function IPOPoolManager() {
     const actualApplicants = [
       ...new Set(
         participants
-          .filter((p) => p.willApply && p.actualApplicantName.trim())
-          .map((p) => p.actualApplicantName.trim())
+          .filter((p) => p.willApply || p.actualApplicantName.trim())
+          .map((p) => p.willApply ? p.name : p.actualApplicantName.trim())
+          .filter(name => name.trim())
       ),
     ];
 
@@ -430,11 +431,7 @@ export default function IPOPoolManager() {
         distribution = distribution.map((p) => {
           let share = (Number(p.initialCapital) / totalCapital) * capitalPool;
           // Give bonus to actual applicant
-          if (
-            p.willApply &&
-            p.actualApplicantName.trim() &&
-            actualApplicants.includes(p.actualApplicantName.trim())
-          ) {
+          if (p.willApply || (p.actualApplicantName.trim() && actualApplicants.includes(p.actualApplicantName.trim()))) {
             share += bonusPerApplier;
           }
           return { ...p, profitShare: share };
@@ -1054,8 +1051,7 @@ export default function IPOPoolManager() {
                       </p>
                       <p>
                         3. If participant won't apply, uncheck "Will Apply" and
-                        enter the actual applicant's name in "Actual Applicant"
-                        field
+                        enter who will apply for them in "Actual Applicant" field
                       </p>
                       <p>
                         4. Enter lots applied manually OR click "Max" button to
@@ -1192,9 +1188,9 @@ export default function IPOPoolManager() {
                                     e.target.value
                                   )
                                 }
-                                disabled={!p.willApply}
+                                disabled={p.willApply}
                                 placeholder={
-                                  p.willApply ? "Enter applicant name" : "N/A"
+                                  p.willApply ? "This person applies" : "Enter who will apply"
                                 }
                                 className="w-32 px-2 py-1 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
                               />
