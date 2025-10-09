@@ -105,7 +105,7 @@ function IPOPoolManager() {
       if (CLOUD_ENABLED && isOnline) {
         // Save to Supabase cloud storage
         const savedProject = await savePublicProjectsToCloud(projectToSave);
-        
+
         // Reload all projects from cloud
         await loadPublicProjects();
         alert("✅ Project saved to cloud! Anyone can now see and edit it.");
@@ -161,8 +161,8 @@ function IPOPoolManager() {
     try {
       const { data, error } = await supabase
         .from(IPO_PROJECTS_TABLE)
-        .select('*')
-        .order('created_at', { ascending: false });
+        .select("*")
+        .order("created_at", { ascending: false });
 
       if (error) {
         throw error;
@@ -201,8 +201,8 @@ function IPOPoolManager() {
         // Load from Supabase
         const { data, error } = await supabase
           .from(IPO_PROJECTS_TABLE)
-          .select('*')
-          .eq('id', projectId)
+          .select("*")
+          .eq("id", projectId)
           .single();
 
         if (error) {
@@ -245,7 +245,7 @@ function IPOPoolManager() {
           const { error } = await supabase
             .from(IPO_PROJECTS_TABLE)
             .delete()
-            .eq('id', projectId);
+            .eq("id", projectId);
 
           if (error) {
             throw error;
@@ -1274,13 +1274,16 @@ function IPOPoolManager() {
                 ☁️ Cloud Storage Active
               </h3>
               <p className="text-green-700 text-sm mb-2">
-                <strong>Using:</strong> Supabase cloud database (shared with everyone!)
+                <strong>Using:</strong> Supabase cloud database (shared with
+                everyone!)
               </p>
               <p className="text-green-700 text-sm mb-2">
-                <strong>Features:</strong> Real-time sharing, cross-device access, persistent storage
+                <strong>Features:</strong> Real-time sharing, cross-device
+                access, persistent storage
               </p>
               <p className="text-green-700 text-sm">
-                <strong>Status:</strong> Anyone can save and load projects from anywhere
+                <strong>Status:</strong> Anyone can save and load projects from
+                anywhere
               </p>
             </div>
 
@@ -1291,7 +1294,8 @@ function IPOPoolManager() {
               </h3>
               {publicProjects.length === 0 ? (
                 <p className="text-gray-500 italic">
-                  No public projects saved yet. Projects are saved to the cloud and shared with everyone!
+                  No public projects saved yet. Projects are saved to the cloud
+                  and shared with everyone!
                 </p>
               ) : (
                 <div className="space-y-2">
