@@ -11,9 +11,6 @@ import {
   Calculator,
   Cloud,
   CloudOff,
-  User,
-  Lock,
-  Unlock,
 } from "lucide-react";
 
 function IPOPoolManager() {
@@ -30,33 +27,31 @@ function IPOPoolManager() {
   const [participants, setParticipants] = useState([]);
   const [transfers, setTransfers] = useState([]);
   const [savedProjects, setSavedProjects] = useState([]);
-  
-  // Cloud saving state
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [userEmail, setUserEmail] = useState("");
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [cloudProjects, setCloudProjects] = useState([]);
-  const [isLoadingCloud, setIsLoadingCloud] = useState(false);
 
-  // Simple cloud storage using localStorage + email-based keys
-  const getCloudKey = (email, projectId) => `ipo_cloud_${email}_${projectId}`;
-  const getCloudProjectsKey = (email) => `ipo_cloud_projects_${email}`;
+  // Public shared state
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [publicProjects, setPublicProjects] = useState([]);
+  const [isLoadingPublic, setIsLoadingPublic] = useState(false);
+
+  // Simple public storage using localStorage with shared keys
+  const getPublicKey = (projectId) => `ipo_public_${projectId}`;
+  const getPublicProjectsKey = () => `ipo_public_projects`;
 
   // Check online status
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
-    
+
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
-    
+
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
     };
   }, []);
 
-  // Load local data on component mount
+  // Load data on component mount
   useEffect(() => {
     const savedIpo = localStorage.getItem("ipoDetails");
     const savedParticipants = localStorage.getItem("participants");
@@ -67,6 +62,9 @@ function IPOPoolManager() {
     if (savedParticipants) setParticipants(JSON.parse(savedParticipants));
     if (savedTransfers) setTransfers(JSON.parse(savedTransfers));
     if (savedProjectsData) setSavedProjects(JSON.parse(savedProjectsData));
+    
+    // Load public projects
+    loadPublicProjects();
   }, []);
 
   // Save to local storage whenever data changes
@@ -86,110 +84,91 @@ function IPOPoolManager() {
     localStorage.setItem("savedProjects", JSON.stringify(savedProjects));
   }, [savedProjects]);
 
-  // Authentication functions
-  const handleLogin = () => {
-    if (userEmail && userEmail.includes("@")) {
-      setIsAuthenticated(true);
-      loadCloudProjects();
-    } else {
-      alert("Please enter a valid email address");
-    }
-  };
-
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-    setUserEmail("");
-    setCloudProjects([]);
-  };
-
-  // Cloud saving functions
-  const saveToCloud = async (projectName, projectData) => {
-    if (!isAuthenticated) {
-      alert("Please login first to save to cloud");
-      return;
-    }
-
-    setIsLoadingCloud(true);
+  // Public saving functions
+  const saveToPublic = async (projectName) => {
+    setIsLoadingPublic(true);
     try {
       const projectId = Date.now().toString();
-      const cloudKey = getCloudKey(userEmail, projectId);
-      const projectsKey = getCloudProjectsKey(userEmail);
-      
+      const publicKey = getPublicKey(projectId);
+      const projectsKey = getPublicProjectsKey();
+
       // Save project data
       const projectToSave = {
         id: projectId,
         name: projectName,
-        data: projectData,
+        data: {
+          ipoDetails,
+          participants,
+          transfers,
+        },
         timestamp: new Date().toISOString(),
-        email: userEmail,
       };
-      
-      localStorage.setItem(cloudKey, JSON.stringify(projectToSave));
-      
+
+      localStorage.setItem(publicKey, JSON.stringify(projectToSave));
+
       // Update projects list
-      const existingProjects = JSON.parse(localStorage.getItem(projectsKey) || "[]");
-      const updatedProjects = [...existingProjects.filter(p => p.id !== projectId), projectToSave];
+      const existingProjects = JSON.parse(
+        localStorage.getItem(projectsKey) || "[]"
+      );
+      const updatedProjects = [
+        ...existingProjects.filter((p) => p.id !== projectId),
+        projectToSave,
+      ];
       localStorage.setItem(projectsKey, JSON.stringify(updatedProjects));
-      
-      setCloudProjects(updatedProjects);
-      alert("✅ Project saved to cloud successfully!");
+
+      setPublicProjects(updatedProjects);
+      alert("✅ Project saved publicly! Anyone can now see and edit it.");
     } catch (error) {
-      alert("❌ Failed to save to cloud: " + error.message);
+      alert("❌ Failed to save project: " + error.message);
     } finally {
-      setIsLoadingCloud(false);
+      setIsLoadingPublic(false);
     }
   };
 
-  const loadCloudProjects = () => {
-    if (!isAuthenticated) return;
-    
+  const loadPublicProjects = () => {
     try {
-      const projectsKey = getCloudProjectsKey(userEmail);
+      const projectsKey = getPublicProjectsKey();
       const projects = JSON.parse(localStorage.getItem(projectsKey) || "[]");
-      setCloudProjects(projects);
+      setPublicProjects(projects);
     } catch (error) {
-      console.error("Failed to load cloud projects:", error);
+      console.error("Failed to load public projects:", error);
     }
   };
 
-  const loadFromCloud = (projectId) => {
-    if (!isAuthenticated) return;
-    
+  const loadFromPublic = (projectId) => {
     try {
-      const cloudKey = getCloudKey(userEmail, projectId);
-      const projectData = JSON.parse(localStorage.getItem(cloudKey));
-      
+      const publicKey = getPublicKey(projectId);
+      const projectData = JSON.parse(localStorage.getItem(publicKey));
+
       if (projectData) {
         const { data } = projectData;
         setIpoDetails(data.ipoDetails || {});
         setParticipants(data.participants || []);
         setTransfers(data.transfers || []);
-        alert("✅ Project loaded from cloud successfully!");
+        alert("✅ Project loaded successfully!");
       }
     } catch (error) {
-      alert("❌ Failed to load from cloud: " + error.message);
+      alert("❌ Failed to load project: " + error.message);
     }
   };
 
-  const deleteFromCloud = (projectId) => {
-    if (!isAuthenticated) return;
-    
-    if (confirm("Are you sure you want to delete this project from cloud?")) {
+  const deleteFromPublic = (projectId) => {
+    if (confirm("Are you sure you want to delete this project? This will remove it for everyone.")) {
       try {
-        const cloudKey = getCloudKey(userEmail, projectId);
-        const projectsKey = getCloudProjectsKey(userEmail);
-        
+        const publicKey = getPublicKey(projectId);
+        const projectsKey = getPublicProjectsKey();
+
         // Remove project data
-        localStorage.removeItem(cloudKey);
-        
+        localStorage.removeItem(publicKey);
+
         // Update projects list
-        const updatedProjects = cloudProjects.filter(p => p.id !== projectId);
+        const updatedProjects = publicProjects.filter((p) => p.id !== projectId);
         localStorage.setItem(projectsKey, JSON.stringify(updatedProjects));
-        setCloudProjects(updatedProjects);
-        
-        alert("✅ Project deleted from cloud successfully!");
+        setPublicProjects(updatedProjects);
+
+        alert("✅ Project deleted successfully!");
       } catch (error) {
-        alert("❌ Failed to delete from cloud: " + error.message);
+        alert("❌ Failed to delete project: " + error.message);
       }
     }
   };
@@ -220,7 +199,7 @@ function IPOPoolManager() {
       participants.map((p) => {
         if (p.id === id) {
           const updated = { ...p, [field]: value };
-          
+
           // If "Will Apply" is unchecked, reset lots applied and allocation data
           if (field === "willApply" && !value) {
             updated.lotsApplied = 0;
@@ -229,14 +208,14 @@ function IPOPoolManager() {
             updated.sellingPrice = 0;
             updated.sellingFee = 0;
           }
-          
+
           // If "Got Allocation" is unchecked, reset allocation data
           if (field === "gotAllocation" && !value) {
             updated.lotsAllocated = 0;
             updated.sellingPrice = 0;
             updated.sellingFee = 0;
           }
-          
+
           return updated;
         }
         return p;
@@ -282,9 +261,7 @@ function IPOPoolManager() {
 
   const updateTransfer = (id, field, value) => {
     setTransfers(
-      transfers.map((t) =>
-        t.id === id ? { ...t, [field]: value } : t
-      )
+      transfers.map((t) => (t.id === id ? { ...t, [field]: value } : t))
     );
   };
 
@@ -370,8 +347,12 @@ function IPOPoolManager() {
     const capitalPerLot = ipoPrice * lotSize;
     const capitalUsedToApply = Number(participant.lotsApplied) * capitalPerLot;
     const allocatedAmount = Number(participant.lotsAllocated) * capitalPerLot;
-    const sellingAmount = Number(participant.lotsAllocated) * lotSize * Number(participant.sellingPrice || 0);
-    const sellingFeeAmount = sellingAmount * (Number(participant.sellingFee || 0) / 100);
+    const sellingAmount =
+      Number(participant.lotsAllocated) *
+      lotSize *
+      Number(participant.sellingPrice || 0);
+    const sellingFeeAmount =
+      sellingAmount * (Number(participant.sellingFee || 0) / 100);
     const netSellingAmount = sellingAmount - sellingFeeAmount;
     const netProfit = netSellingAmount - allocatedAmount;
 
@@ -403,7 +384,8 @@ function IPOPoolManager() {
 
     const distribution = participants.map((p) => {
       const details = calculateParticipantDetails(p);
-      const capitalShare = totalCapital > 0 ? Number(p.initialCapital || 0) / totalCapital : 0;
+      const capitalShare =
+        totalCapital > 0 ? Number(p.initialCapital || 0) / totalCapital : 0;
       const profitShare = totalProfitLoss * capitalShare;
       const netPosition = Number(p.initialCapital || 0) + profitShare;
 
@@ -424,7 +406,8 @@ function IPOPoolManager() {
     };
   };
 
-  const { totalCapital, totalCapitalUsed, totalProfitLoss, distribution } = calculateDistribution();
+  const { totalCapital, totalCapitalUsed, totalProfitLoss, distribution } =
+    calculateDistribution();
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -438,8 +421,8 @@ function IPOPoolManager() {
                 IPO Pool Manager
               </h1>
             </div>
-            
-            {/* Online Status & Authentication */}
+
+            {/* Public Sharing Status */}
             <div className="flex items-center space-x-4">
               <div className="flex items-center space-x-2">
                 {isOnline ? (
@@ -452,36 +435,12 @@ function IPOPoolManager() {
                 </span>
               </div>
               
-              {!isAuthenticated ? (
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="email"
-                    placeholder="Enter email to save online"
-                    value={userEmail}
-                    onChange={(e) => setUserEmail(e.target.value)}
-                    className="px-3 py-1 border rounded text-sm"
-                  />
-                  <button
-                    onClick={handleLogin}
-                    className="flex items-center space-x-1 px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-                  >
-                    <Lock className="h-4 w-4" />
-                    <span>Login</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center space-x-2">
-                  <User className="h-5 w-5 text-blue-600" />
-                  <span className="text-sm text-gray-600">{userEmail}</span>
-                  <button
-                    onClick={handleLogout}
-                    className="flex items-center space-x-1 px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
-                  >
-                    <Unlock className="h-4 w-4" />
-                    <span>Logout</span>
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center space-x-2 px-3 py-1 bg-green-100 rounded">
+                <Users className="h-4 w-4 text-green-600" />
+                <span className="text-sm text-green-700 font-medium">
+                  Public Sharing Enabled
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -526,7 +485,11 @@ function IPOPoolManager() {
                 { key: "ipoPrice", label: "IPO Price (RM)", type: "number" },
                 { key: "lotSize", label: "Lot Size (shares)", type: "number" },
                 { key: "listingDate", label: "Listing Date", type: "date" },
-                { key: "expectedReturn", label: "Expected Return (%)", type: "number" },
+                {
+                  key: "expectedReturn",
+                  label: "Expected Return (%)",
+                  type: "number",
+                },
               ].map(({ key, label, type }) => (
                 <div key={key}>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -563,7 +526,9 @@ function IPOPoolManager() {
               <table className="min-w-full border border-gray-300">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="border px-3 py-2 text-left font-semibold">Name</th>
+                    <th className="border px-3 py-2 text-left font-semibold">
+                      Name
+                    </th>
                     <th className="border px-3 py-2 text-right font-semibold">
                       Initial Capital (RM)
                     </th>
@@ -636,7 +601,11 @@ function IPOPoolManager() {
                             type="checkbox"
                             checked={p.willApply}
                             onChange={(e) =>
-                              updateParticipant(p.id, "willApply", e.target.checked)
+                              updateParticipant(
+                                p.id,
+                                "willApply",
+                                e.target.checked
+                              )
                             }
                             className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
                           />
@@ -659,7 +628,11 @@ function IPOPoolManager() {
                         <td className="border px-3 py-2 text-center">
                           <button
                             onClick={() => useAllCapital(p.id)}
-                            disabled={!p.willApply || !ipoDetails.ipoPrice || !ipoDetails.lotSize}
+                            disabled={
+                              !p.willApply ||
+                              !ipoDetails.ipoPrice ||
+                              !ipoDetails.lotSize
+                            }
                             className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
                             title="Calculate max lots from available capital"
                           >
@@ -674,7 +647,11 @@ function IPOPoolManager() {
                             type="checkbox"
                             checked={p.gotAllocation}
                             onChange={(e) =>
-                              updateParticipant(p.id, "gotAllocation", e.target.checked)
+                              updateParticipant(
+                                p.id,
+                                "gotAllocation",
+                                e.target.checked
+                              )
                             }
                             disabled={!p.willApply}
                             className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded disabled:bg-gray-100"
@@ -718,7 +695,11 @@ function IPOPoolManager() {
                             type="number"
                             value={p.sellingFee}
                             onChange={(e) =>
-                              updateParticipant(p.id, "sellingFee", e.target.value)
+                              updateParticipant(
+                                p.id,
+                                "sellingFee",
+                                e.target.value
+                              )
                             }
                             disabled={!p.gotAllocation}
                             className="w-20 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
@@ -769,12 +750,18 @@ function IPOPoolManager() {
               <table className="min-w-full border border-gray-300">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="border px-3 py-2 text-left font-semibold">From</th>
-                    <th className="border px-3 py-2 text-left font-semibold">To</th>
+                    <th className="border px-3 py-2 text-left font-semibold">
+                      From
+                    </th>
+                    <th className="border px-3 py-2 text-left font-semibold">
+                      To
+                    </th>
                     <th className="border px-3 py-2 text-right font-semibold">
                       Amount (RM)
                     </th>
-                    <th className="border px-3 py-2 text-left font-semibold">Reason</th>
+                    <th className="border px-3 py-2 text-left font-semibold">
+                      Reason
+                    </th>
                     <th className="border px-3 py-2 text-center font-semibold">
                       Action
                     </th>
@@ -957,8 +944,7 @@ function IPOPoolManager() {
                               }
                             >
                               {(
-                                (p.netPosition /
-                                  Number(p.initialCapital)) *
+                                (p.netPosition / Number(p.initialCapital)) *
                                 100
                               ).toFixed(2)}
                               %
@@ -1031,10 +1017,9 @@ function IPOPoolManager() {
                                 : "text-red-600"
                             }
                           >
-                            {(
-                              (totalProfitLoss / totalCapital) *
-                              100
-                            ).toFixed(2)}
+                            {((totalProfitLoss / totalCapital) * 100).toFixed(
+                              2
+                            )}
                             %
                           </span>
                         ) : (
@@ -1064,23 +1049,30 @@ function IPOPoolManager() {
                   </tfoot>
                 </table>
               </div>
-              
+
               <div className="mt-4 p-4 bg-blue-50 rounded-lg">
-                <h3 className="font-semibold text-blue-900 mb-2">📊 How This Works:</h3>
+                <h3 className="font-semibold text-blue-900 mb-2">
+                  📊 How This Works:
+                </h3>
                 <p className="text-blue-800 text-sm mb-2">
-                  • <strong>Capital Share:</strong> Your percentage of total pool capital
+                  • <strong>Capital Share:</strong> Your percentage of total
+                  pool capital
                 </p>
                 <p className="text-blue-800 text-sm mb-2">
-                  • <strong>Profit Share:</strong> Your share of total profit/loss based on capital contribution
+                  • <strong>Profit Share:</strong> Your share of total
+                  profit/loss based on capital contribution
                 </p>
                 <p className="text-blue-800 text-sm mb-2">
-                  • <strong>Final Amount:</strong> Your initial capital + profit share
+                  • <strong>Final Amount:</strong> Your initial capital + profit
+                  share
                 </p>
                 <p className="text-blue-800 text-sm mb-2">
-                  • <strong>ROI (vs Initial Capital):</strong> Return on investment based on your total capital contribution
+                  • <strong>ROI (vs Initial Capital):</strong> Return on
+                  investment based on your total capital contribution
                 </p>
                 <p className="text-blue-800 text-sm">
-                  • <strong>ROI (vs Allocated Capital):</strong> Return on investment based on capital actually used for IPO application
+                  • <strong>ROI (vs Allocated Capital):</strong> Return on
+                  investment based on capital actually used for IPO application
                 </p>
               </div>
             </div>
@@ -1100,16 +1092,19 @@ function IPOPoolManager() {
                   <span>Save Current</span>
                 </button>
                 <button
-                  onClick={saveToCloud}
-                  disabled={!isAuthenticated || isLoadingCloud}
+                  onClick={() => {
+                    const projectName = prompt("Enter project name:");
+                    if (projectName) saveToPublic(projectName);
+                  }}
+                  disabled={isLoadingPublic}
                   className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
                 >
-                  {isLoadingCloud ? (
+                  {isLoadingPublic ? (
                     <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
                   ) : (
-                    <Cloud className="h-4 w-4" />
+                    <Users className="h-4 w-4" />
                   )}
-                  <span>Save to Cloud</span>
+                  <span>Save Publicly</span>
                 </button>
                 <button
                   onClick={exportData}
@@ -1135,7 +1130,9 @@ function IPOPoolManager() {
             <div className="mb-8">
               <h3 className="text-lg font-medium mb-4">💾 Local Projects</h3>
               {savedProjects.length === 0 ? (
-                <p className="text-gray-500 italic">No local projects saved yet</p>
+                <p className="text-gray-500 italic">
+                  No local projects saved yet
+                </p>
               ) : (
                 <div className="space-y-2">
                   {savedProjects.map((project) => (
@@ -1169,45 +1166,45 @@ function IPOPoolManager() {
               )}
             </div>
 
-            {/* Cloud Projects */}
-            {isAuthenticated && (
-              <div>
-                <h3 className="text-lg font-medium mb-4">☁️ Cloud Projects</h3>
-                {cloudProjects.length === 0 ? (
-                  <p className="text-gray-500 italic">No cloud projects saved yet</p>
-                ) : (
-                  <div className="space-y-2">
-                    {cloudProjects.map((project) => (
-                      <div
-                        key={project.id}
-                        className="flex justify-between items-center p-3 border rounded-lg bg-blue-50"
-                      >
-                        <div>
-                          <h4 className="font-medium">{project.name}</h4>
-                          <p className="text-sm text-gray-500">
-                            {new Date(project.timestamp).toLocaleString()} • {project.email}
-                          </p>
-                        </div>
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => loadFromCloud(project.id)}
-                            className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-                          >
-                            Load
-                          </button>
-                          <button
-                            onClick={() => deleteFromCloud(project.id)}
-                            className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
-                          >
-                            Delete
-                          </button>
-                        </div>
+            {/* Public Projects */}
+            <div>
+              <h3 className="text-lg font-medium mb-4">🌐 Public Projects (Shared with Everyone)</h3>
+              {publicProjects.length === 0 ? (
+                <p className="text-gray-500 italic">
+                  No public projects saved yet. Anyone can save and share projects here!
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {publicProjects.map((project) => (
+                    <div
+                      key={project.id}
+                      className="flex justify-between items-center p-3 border rounded-lg bg-green-50"
+                    >
+                      <div>
+                        <h4 className="font-medium">{project.name}</h4>
+                        <p className="text-sm text-gray-500">
+                          {new Date(project.timestamp).toLocaleString()} • Shared publicly
+                        </p>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => loadFromPublic(project.id)}
+                          className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                        >
+                          Load
+                        </button>
+                        <button
+                          onClick={() => deleteFromPublic(project.id)}
+                          className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
