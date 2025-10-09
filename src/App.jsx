@@ -1,1390 +1,1227 @@
-import React, { useState, useEffect } from "react";
-import {
-  Save,
-  Upload,
-  Download,
-  Plus,
-  Trash2,
-  Users,
-  TrendingUp,
-  DollarSign,
-  Calculator,
-  Cloud,
-  CloudOff,
-} from "lucide-react";
-import { supabase, IPO_PROJECTS_TABLE } from "./supabase";
+import React, { useState } from 'react';
+import { PlusCircle, MinusCircle, Calculator, Users, TrendingUp, FileText, Save, FolderOpen, Download, Upload, Trash2, AlertCircle } from 'lucide-react';
 
-function IPOPoolManager() {
-  // State management
-  const [activeTab, setActiveTab] = useState("ipo");
+export default function IPOPoolManager() {
+  const [savedProjects, setSavedProjects] = useState([]);
+  const [currentProjectId, setCurrentProjectId] = useState(null);
+  const [showProjectList, setShowProjectList] = useState(false);
+
   const [ipoDetails, setIpoDetails] = useState({
-    companyName: "",
-    ipoPrice: "",
-    lotSize: "",
-    listingDate: "",
-    expectedReturn: "",
+    name: '',
+    applicationDate: '',
+    ipoPrice: 0,
+    lotSize: 100
   });
 
-  const [participants, setParticipants] = useState([]);
-  const [transfers, setTransfers] = useState([]);
-  const [savedProjects, setSavedProjects] = useState([]);
-
-  // Public shared state
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [publicProjects, setPublicProjects] = useState([]);
-  const [isLoadingPublic, setIsLoadingPublic] = useState(false);
-  const [savedNames, setSavedNames] = useState([]);
-
-  // Supabase cloud storage - now enabled!
-  const CLOUD_ENABLED = true;
-
-  // Check online status
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, []);
-
-  // Load data on component mount
-  useEffect(() => {
-    const savedIpo = localStorage.getItem("ipoDetails");
-    const savedParticipants = localStorage.getItem("participants");
-    const savedTransfers = localStorage.getItem("transfers");
-    const savedProjectsData = localStorage.getItem("savedProjects");
-
-    if (savedIpo) setIpoDetails(JSON.parse(savedIpo));
-    if (savedParticipants) setParticipants(JSON.parse(savedParticipants));
-    if (savedTransfers) setTransfers(JSON.parse(savedTransfers));
-    if (savedProjectsData) setSavedProjects(JSON.parse(savedProjectsData));
-
-    // Load saved names
-    const savedNamesData = localStorage.getItem("savedNames");
-    if (savedNamesData) setSavedNames(JSON.parse(savedNamesData));
-
-    // Load public projects
-    loadPublicProjects();
-  }, []);
-
-  // Save to local storage whenever data changes
-  useEffect(() => {
-    localStorage.setItem("ipoDetails", JSON.stringify(ipoDetails));
-  }, [ipoDetails]);
-
-  useEffect(() => {
-    localStorage.setItem("participants", JSON.stringify(participants));
-  }, [participants]);
-
-  useEffect(() => {
-    localStorage.setItem("transfers", JSON.stringify(transfers));
-  }, [transfers]);
-
-  useEffect(() => {
-    localStorage.setItem("savedProjects", JSON.stringify(savedProjects));
-  }, [savedProjects]);
-
-  // Public saving functions
-  const saveToPublic = async (projectName) => {
-    setIsLoadingPublic(true);
-    try {
-      const projectId = Date.now().toString();
-
-      // Save project data
-      const projectToSave = {
-        id: projectId,
-        name: projectName,
-        data: {
-          ipoDetails,
-          participants,
-          transfers,
-        },
-        timestamp: new Date().toISOString(),
-      };
-
-      if (CLOUD_ENABLED && isOnline) {
-        // Save to Supabase cloud storage
-        const savedProject = await savePublicProjectsToCloud(projectToSave);
-
-        // Reload all projects from cloud
-        await loadPublicProjects();
-        alert("✅ Project saved to cloud! Anyone can now see and edit it.");
-      } else {
-        // Fallback to localStorage
-        const publicKey = `ipo_public_${projectId}`;
-        const projectsKey = `ipo_public_projects`;
-
-        localStorage.setItem(publicKey, JSON.stringify(projectToSave));
-
-        const existingProjects = JSON.parse(
-          localStorage.getItem(projectsKey) || "[]"
-        );
-        const updatedProjects = [
-          ...existingProjects.filter((p) => p.id !== projectId),
-          projectToSave,
-        ];
-        localStorage.setItem(projectsKey, JSON.stringify(updatedProjects));
-        setPublicProjects(updatedProjects);
-        alert("✅ Project saved locally! (Cloud storage not available)");
-      }
-    } catch (error) {
-      alert("❌ Failed to save project: " + error.message);
-    } finally {
-      setIsLoadingPublic(false);
-    }
-  };
-
-  // Supabase cloud storage functions
-  const savePublicProjectsToCloud = async (projectData) => {
-    if (!CLOUD_ENABLED || !isOnline) return;
-
-    try {
-      const { data, error } = await supabase
-        .from(IPO_PROJECTS_TABLE)
-        .insert([projectData])
-        .select();
-
-      if (error) {
-        throw error;
-      }
-
-      return data[0];
-    } catch (error) {
-      console.error("Supabase save failed:", error);
-      throw error;
-    }
-  };
-
-  const loadPublicProjectsFromCloud = async () => {
-    if (!CLOUD_ENABLED || !isOnline) return [];
-
-    try {
-      const { data, error } = await supabase
-        .from(IPO_PROJECTS_TABLE)
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        throw error;
-      }
-
-      return data || [];
-    } catch (error) {
-      console.error("Supabase load failed:", error);
-      return [];
-    }
-  };
-
-  const loadPublicProjects = async () => {
-    try {
-      if (CLOUD_ENABLED && isOnline) {
-        const projects = await loadPublicProjectsFromCloud();
-        setPublicProjects(projects);
-      } else {
-        // Fallback to localStorage
-        const projectsKey = `ipo_public_projects`;
-        const projects = JSON.parse(localStorage.getItem(projectsKey) || "[]");
-        setPublicProjects(projects);
-      }
-    } catch (error) {
-      console.error("Failed to load public projects:", error);
-      // Fallback to localStorage
-      const projectsKey = `ipo_public_projects`;
-      const projects = JSON.parse(localStorage.getItem(projectsKey) || "[]");
-      setPublicProjects(projects);
-    }
-  };
-
-  const loadFromPublic = async (projectId) => {
-    try {
-      if (CLOUD_ENABLED && isOnline) {
-        // Load from Supabase
-        const { data, error } = await supabase
-          .from(IPO_PROJECTS_TABLE)
-          .select("*")
-          .eq("id", projectId)
-          .single();
-
-        if (error) {
-          throw error;
-        }
-
-        if (data) {
-          setIpoDetails(data.ipo_details || {});
-          setParticipants(data.participants || []);
-          setTransfers(data.transfers || []);
-          alert("✅ Project loaded from cloud successfully!");
-        }
-      } else {
-        // Fallback to localStorage
-        const publicKey = `ipo_public_${projectId}`;
-        const projectData = JSON.parse(localStorage.getItem(publicKey));
-
-        if (projectData) {
-          const { data } = projectData;
-          setIpoDetails(data.ipoDetails || {});
-          setParticipants(data.participants || []);
-          setTransfers(data.transfers || []);
-          alert("✅ Project loaded locally!");
-        }
-      }
-    } catch (error) {
-      alert("❌ Failed to load project: " + error.message);
-    }
-  };
-
-  const deleteFromPublic = async (projectId) => {
-    if (
-      confirm(
-        "Are you sure you want to delete this project? This will remove it for everyone."
-      )
-    ) {
-      try {
-        if (CLOUD_ENABLED && isOnline) {
-          // Delete from Supabase
-          const { error } = await supabase
-            .from(IPO_PROJECTS_TABLE)
-            .delete()
-            .eq("id", projectId);
-
-          if (error) {
-            throw error;
-          }
-
-          // Reload projects from cloud
-          await loadPublicProjects();
-          alert("✅ Project deleted from cloud successfully!");
-        } else {
-          // Fallback to localStorage
-          const publicKey = `ipo_public_${projectId}`;
-          const projectsKey = `ipo_public_projects`;
-
-          localStorage.removeItem(publicKey);
-
-          const updatedProjects = publicProjects.filter(
-            (p) => p.id !== projectId
-          );
-          localStorage.setItem(projectsKey, JSON.stringify(updatedProjects));
-          setPublicProjects(updatedProjects);
-
-          alert("✅ Project deleted locally!");
-        }
-      } catch (error) {
-        alert("❌ Failed to delete project: " + error.message);
-      }
-    }
-  };
-
-  // Existing functions (participants, transfers, etc.)
-  const addParticipant = () => {
-    const newParticipant = {
-      id: Date.now().toString(),
-      name: "",
-      initialCapital: 0,
-      willApply: false,
+  const [participants, setParticipants] = useState([
+    { 
+      id: 1, 
+      name: 'Person A', 
+      initialCapital: 10000, 
+      willApply: true, 
       lotsApplied: 0,
       gotAllocation: false,
       lotsAllocated: 0,
       sellingPrice: 0,
-      sellingFee: 0, // Now in RM, not percentage
+      sellingFee: 0
+    }
+  ]);
+
+  const [transfers, setTransfers] = useState([]);
+  const [activeTab, setActiveTab] = useState('ipo');
+
+  const calculateMaxLots = (capital, ipoPrice, lotSize) => {
+    if (!ipoPrice || !lotSize || !capital) return 0;
+    const maxLots = Math.floor(Number(capital) / (Number(ipoPrice) * Number(lotSize)));
+    return maxLots;
+  };
+
+  const applyMaxLots = (participantId) => {
+    const participant = participants.find(p => p.id === participantId);
+    if (participant) {
+      const maxLots = calculateMaxLots(participant.initialCapital, ipoDetails.ipoPrice, ipoDetails.lotSize);
+      updateParticipant(participantId, 'lotsApplied', maxLots);
+    }
+  };
+
+  const saveCurrentProject = () => {
+    const projectName = ipoDetails.name || 'Untitled IPO';
+    const projectData = {
+      id: currentProjectId || Date.now(),
+      savedDate: new Date().toISOString(),
+      ipoDetails,
+      participants,
+      transfers
     };
-    setParticipants([...participants, newParticipant]);
+
+    if (currentProjectId) {
+      setSavedProjects(savedProjects.map(p => p.id === currentProjectId ? projectData : p));
+    } else {
+      setSavedProjects([...savedProjects, projectData]);
+      setCurrentProjectId(projectData.id);
+    }
+    
+    alert(`Project "${projectName}" saved successfully!`);
   };
 
-  const removeParticipant = (id) => {
-    setParticipants(participants.filter((p) => p.id !== id));
-    setTransfers(transfers.filter((t) => t.from !== id && t.to !== id));
+  const loadProject = (project) => {
+    setIpoDetails(project.ipoDetails);
+    setParticipants(project.participants);
+    setTransfers(project.transfers);
+    setCurrentProjectId(project.id);
+    setShowProjectList(false);
+    setActiveTab('ipo');
   };
 
-  const updateParticipant = (id, field, value) => {
-    setParticipants(
-      participants.map((p) => {
-        if (p.id === id) {
-          const updated = { ...p, [field]: value };
-
-          // Save name to saved names list if it's a new name
-          if (field === "name" && value && !savedNames.includes(value)) {
-            const newSavedNames = [...savedNames, value];
-            setSavedNames(newSavedNames);
-            localStorage.setItem("savedNames", JSON.stringify(newSavedNames));
-          }
-
-          // If "Will Apply" is unchecked, reset lots applied and allocation data
-          if (field === "willApply" && !value) {
-            updated.lotsApplied = 0;
-            updated.gotAllocation = false;
-            updated.lotsAllocated = 0;
-            updated.sellingPrice = 0;
-            updated.sellingFee = 0;
-          }
-
-          // If "Got Allocation" is unchecked, reset allocation data
-          if (field === "gotAllocation" && !value) {
-            updated.lotsAllocated = 0;
-            updated.sellingPrice = 0;
-            updated.sellingFee = 0;
-          }
-
-          return updated;
-        }
-        return p;
-      })
-    );
-  };
-
-  const useAllCapital = (participantId) => {
-    const participant = participants.find((p) => p.id === participantId);
-    if (
-      !participant ||
-      !participant.willApply ||
-      !ipoDetails.ipoPrice ||
-      !ipoDetails.lotSize
-    ) {
+  const createNewProject = () => {
+    if (ipoDetails.name && !confirm('Create new project? Unsaved changes will be lost.')) {
       return;
     }
-
-    const ipoPrice = Number(ipoDetails.ipoPrice);
-    const lotSize = Number(ipoDetails.lotSize);
-    const capitalPerLot = ipoPrice * lotSize;
-    const maxLots = Math.floor(
-      Number(participant.initialCapital) / capitalPerLot
-    );
-
-    updateParticipant(participantId, "lotsApplied", maxLots);
+    
+    setIpoDetails({
+      name: '',
+      applicationDate: '',
+      ipoPrice: 0,
+      lotSize: 100
+    });
+    setParticipants([
+      { 
+        id: 1, 
+        name: 'Person A', 
+        initialCapital: 10000, 
+        willApply: true, 
+        lotsApplied: 0,
+        gotAllocation: false,
+        lotsAllocated: 0,
+        sellingPrice: 0,
+        sellingFee: 0
+      }
+    ]);
+    setTransfers([]);
+    setCurrentProjectId(null);
+    setActiveTab('ipo');
   };
 
-  const addTransfer = () => {
-    const newTransfer = {
-      id: Date.now().toString(),
-      from: "",
-      to: "",
-      amount: 0,
-      reason: "",
-    };
-    setTransfers([...transfers, newTransfer]);
-  };
-
-  const removeTransfer = (id) => {
-    setTransfers(transfers.filter((t) => t.id !== id));
-  };
-
-  const updateTransfer = (id, field, value) => {
-    setTransfers(
-      transfers.map((t) => (t.id === id ? { ...t, [field]: value } : t))
-    );
-  };
-
-  // Save project locally
-  const saveProject = () => {
-    const projectName = prompt("Enter project name:");
-    if (!projectName) return;
-
-    const projectData = {
-      name: projectName,
-      ipoDetails,
-      participants,
-      transfers,
-      timestamp: new Date().toISOString(),
-    };
-
-    const updatedProjects = [
-      ...savedProjects.filter((p) => p.name !== projectName),
-      projectData,
-    ];
-    setSavedProjects(updatedProjects);
-    alert("Project saved successfully!");
-  };
-
-  const loadProject = (projectData) => {
-    setIpoDetails(projectData.ipoDetails || {});
-    setParticipants(projectData.participants || []);
-    setTransfers(projectData.transfers || []);
-    alert("Project loaded successfully!");
-  };
-
-  const deleteProject = (projectName) => {
-    if (confirm("Are you sure you want to delete this project?")) {
-      setSavedProjects(savedProjects.filter((p) => p.name !== projectName));
+  const deleteProject = (projectId) => {
+    if (confirm('Delete this project permanently?')) {
+      setSavedProjects(savedProjects.filter(p => p.id !== projectId));
+      if (currentProjectId === projectId) {
+        createNewProject();
+      }
     }
   };
 
-  // Export/Import functions
   const exportData = () => {
-    const data = {
-      ipoDetails,
-      participants,
-      transfers,
-      timestamp: new Date().toISOString(),
-    };
-
-    const blob = new Blob([JSON.stringify(data, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `ipo-project-${new Date().toISOString().split("T")[0]}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const dataStr = JSON.stringify(savedProjects, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `ipo-pool-projects-${new Date().toISOString().split('T')[0]}.json`;
+    link.click();
     URL.revokeObjectURL(url);
   };
 
   const importData = (event) => {
     const file = event.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = JSON.parse(e.target.result);
-        setIpoDetails(data.ipoDetails || {});
-        setParticipants(data.participants || []);
-        setTransfers(data.transfers || []);
-        alert("Data imported successfully!");
-      } catch (error) {
-        alert("Error importing data: " + error.message);
-      }
-    };
-    reader.readAsText(file);
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const imported = JSON.parse(e.target.result);
+          setSavedProjects(imported);
+          alert(`Successfully imported ${imported.length} project(s)!`);
+        } catch (error) {
+          alert('Error importing file. Please check the file format.');
+        }
+      };
+      reader.readAsText(file);
+    }
   };
 
-  // Calculation functions
-  const calculateParticipantDetails = (participant) => {
-    const ipoPrice = Number(ipoDetails.ipoPrice) || 0;
-    const lotSize = Number(ipoDetails.lotSize) || 0;
-    const capitalPerLot = ipoPrice * lotSize;
-    const capitalUsedToApply = Number(participant.lotsApplied) * capitalPerLot;
-    const allocatedAmount = Number(participant.lotsAllocated) * capitalPerLot;
-    const sellingAmount =
-      Number(participant.lotsAllocated) *
-      lotSize *
-      Number(participant.sellingPrice || 0);
-    const sellingFeeAmount = Number(participant.sellingFee || 0); // Now in RM, not percentage
-    const netSellingAmount = sellingAmount - sellingFeeAmount;
-    const netProfit = netSellingAmount - allocatedAmount;
+  const addParticipant = () => {
+    const newId = Math.max(0, ...participants.map(p => p.id)) + 1;
+    setParticipants([...participants, {
+      id: newId,
+      name: `Person ${String.fromCharCode(64 + newId)}`,
+      initialCapital: 0,
+      willApply: true,
+      lotsApplied: 0,
+      gotAllocation: false,
+      lotsAllocated: 0,
+      sellingPrice: 0,
+      sellingFee: 0
+    }]);
+  };
 
+  const removeParticipant = (id) => {
+    setParticipants(participants.filter(p => p.id !== id));
+    setTransfers(transfers.filter(t => t.from !== id && t.to !== id));
+  };
+
+  const updateParticipant = (id, field, value) => {
+    setParticipants(participants.map(p =>
+      p.id === id ? { ...p, [field]: value } : p
+    ));
+  };
+
+  const addTransfer = () => {
+    if (participants.length >= 2) {
+      setTransfers([...transfers, {
+        id: Date.now(),
+        from: participants[0].id,
+        to: participants[1].id,
+        amount: 0,
+        reason: 'Tier matching'
+      }]);
+    }
+  };
+
+  const removeTransfer = (id) => {
+    setTransfers(transfers.filter(t => t.id !== id));
+  };
+
+  const updateTransfer = (id, field, value) => {
+    setTransfers(transfers.map(t =>
+      t.id === id ? { ...t, [field]: value } : t
+    ));
+  };
+
+  const calculateParticipantDetails = (p) => {
+    const ipoPrice = Number(ipoDetails.ipoPrice);
+    const sellingPrice = Number(p.sellingPrice);
+    const lotSize = Number(ipoDetails.lotSize);
+    const sellingFee = Number(p.sellingFee);
+    
+    const lotsApplied = Number(p.lotsApplied);
+    const lotsAllocated = Number(p.lotsAllocated);
+    
+    const capitalUsedToApply = lotsApplied * ipoPrice * lotSize;
+    const allocatedAmount = lotsAllocated * ipoPrice * lotSize;
+    const grossProfit = lotsAllocated * (sellingPrice - ipoPrice) * lotSize;
+    const profitLoss = grossProfit - sellingFee;
+    
     return {
       capitalUsedToApply,
       allocatedAmount,
-      sellingAmount,
-      sellingFeeAmount,
-      netSellingAmount,
-      netProfit,
+      profitLoss,
+      grossProfit
     };
   };
 
   const calculateDistribution = () => {
-    const totalCapital = participants.reduce(
-      (sum, p) => sum + Number(p.initialCapital || 0),
-      0
-    );
-
-    const totalCapitalUsed = participants.reduce((sum, p) => {
+    const totalCapital = participants.reduce((sum, p) => sum + Number(p.initialCapital), 0);
+    
+    const totalProfit = participants.reduce((sum, p) => {
       const details = calculateParticipantDetails(p);
-      return sum + details.capitalUsedToApply;
+      return sum + details.profitLoss;
     }, 0);
+    
+    const whoGotAllocation = participants.filter(p => p.gotAllocation);
+    const whoApplied = participants.filter(p => p.willApply);
+    const onlyCapitalProviders = participants.filter(p => !p.willApply);
 
-    const totalProfitLoss = participants.reduce((sum, p) => {
+    let distribution = participants.map(p => {
       const details = calculateParticipantDetails(p);
-      return sum + details.netProfit;
-    }, 0);
-
-    const distribution = participants.map((p) => {
-      const details = calculateParticipantDetails(p);
-      const capitalShare =
-        totalCapital > 0 ? Number(p.initialCapital || 0) / totalCapital : 0;
-      const profitShare = totalProfitLoss * capitalShare;
-      const netPosition = Number(p.initialCapital || 0) + profitShare;
-
       return {
         ...p,
         ...details,
-        capitalShare,
-        profitShare,
-        netPosition,
+        capitalPercent: totalCapital > 0 ? (Number(p.initialCapital) / totalCapital * 100) : 0,
+        profitShare: 0,
+        actualProfitReceived: details.profitLoss,
+        tierMatchingTransferOut: 0,
+        tierMatchingTransferIn: 0,
+        settlementTransferOut: 0,
+        settlementTransferIn: 0,
+        netPosition: 0
       };
     });
 
-    return {
-      totalCapital,
-      totalCapitalUsed,
-      totalProfitLoss,
-      distribution,
-    };
+    if (totalProfit !== 0 && whoGotAllocation.length > 0) {
+      if (onlyCapitalProviders.length === 0) {
+        const bonusPool = totalProfit * 0.1;
+        const mainPool = totalProfit * 0.9;
+        const bonusPerWinner = bonusPool / whoGotAllocation.length;
+
+        distribution = distribution.map(p => {
+          let share = (Number(p.initialCapital) / totalCapital) * mainPool;
+          if (p.gotAllocation) {
+            share += bonusPerWinner;
+          }
+          return { ...p, profitShare: share };
+        });
+      } else {
+        const applierBonus = totalProfit * 0.3;
+        const capitalPool = totalProfit * 0.7;
+        const bonusPerApplier = applierBonus / whoApplied.length;
+
+        distribution = distribution.map(p => {
+          let share = (Number(p.initialCapital) / totalCapital) * capitalPool;
+          if (p.willApply) {
+            share += bonusPerApplier;
+          }
+          return { ...p, profitShare: share };
+        });
+      }
+    }
+
+    distribution = distribution.map(p => {
+      const tierMatchingTransferOut = transfers
+        .filter(t => t.from === p.id)
+        .reduce((sum, t) => sum + Number(t.amount), 0);
+      const tierMatchingTransferIn = transfers
+        .filter(t => t.to === p.id)
+        .reduce((sum, t) => sum + Number(t.amount), 0);
+      
+      return { ...p, tierMatchingTransferOut, tierMatchingTransferIn };
+    });
+
+    distribution = distribution.map(p => {
+      if (p.gotAllocation) {
+        const settlementTransferOut = p.actualProfitReceived - p.profitShare;
+        return { ...p, settlementTransferOut: Math.max(0, settlementTransferOut) };
+      } else {
+        const settlementTransferIn = p.profitShare;
+        return { ...p, settlementTransferIn };
+      }
+    });
+
+    distribution = distribution.map(p => {
+      const netPosition = p.profitShare + p.tierMatchingTransferIn - p.tierMatchingTransferOut;
+      return { ...p, netPosition };
+    });
+
+    return distribution;
   };
 
-  const { totalCapital, totalCapitalUsed, totalProfitLoss, distribution } =
-    calculateDistribution();
+  const calculateSettlementPairs = () => {
+    const distribution = calculateDistribution();
+    const creditors = distribution.filter(p => p.netPosition > 0).sort((a, b) => b.netPosition - a.netPosition);
+    const debtors = distribution.filter(p => p.netPosition < 0).sort((a, b) => a.netPosition - b.netPosition);
+    
+    const settlements = [];
+    let i = 0, j = 0;
+    
+    const creditorsCopy = creditors.map(c => ({ ...c, remaining: c.netPosition }));
+    const debtorsCopy = debtors.map(d => ({ ...d, remaining: Math.abs(d.netPosition) }));
+    
+    while (i < creditorsCopy.length && j < debtorsCopy.length) {
+      const creditor = creditorsCopy[i];
+      const debtor = debtorsCopy[j];
+      
+      const amount = Math.min(creditor.remaining, debtor.remaining);
+      
+      if (amount > 0.01) {
+        settlements.push({
+          from: debtor.name,
+          to: creditor.name,
+          amount: amount
+        });
+      }
+      
+      creditor.remaining -= amount;
+      debtor.remaining -= amount;
+      
+      if (creditor.remaining < 0.01) i++;
+      if (debtor.remaining < 0.01) j++;
+    }
+    
+    return settlements;
+  };
+
+  const distribution = calculateDistribution();
+  const totalCapital = participants.reduce((sum, p) => sum + Number(p.initialCapital), 0);
+  const totalLotsApplied = participants.reduce((sum, p) => sum + Number(p.lotsApplied), 0);
+  const totalLotsAllocated = participants.reduce((sum, p) => sum + Number(p.lotsAllocated), 0);
+  const totalCapitalUsed = distribution.reduce((sum, p) => sum + p.capitalUsedToApply, 0);
+  const totalAllocated = distribution.reduce((sum, p) => sum + p.allocatedAmount, 0);
+  const totalProfitLoss = distribution.reduce((sum, p) => sum + p.profitLoss, 0);
+  const whoApplied = participants.filter(p => p.willApply);
+  const whoGotAllocation = participants.filter(p => p.gotAllocation);
+  const onlyCapitalProviders = participants.filter(p => !p.willApply);
+
+  const hasAllocationData = whoGotAllocation.length > 0;
+  const hasSellingPrice = whoGotAllocation.some(p => Number(p.sellingPrice) > 0);
+  const canShowDistribution = hasAllocationData && hasSellingPrice;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div className="flex items-center space-x-3">
-              <TrendingUp className="h-8 w-8 text-indigo-600" />
-              <h1 className="text-2xl font-bold text-gray-900">
-                IPO Pool Manager
-              </h1>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 p-4">
+      <div className="max-w-7xl mx-auto">
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-3">
+              <TrendingUp className="w-8 h-8 text-indigo-600" />
+              <div>
+                <h1 className="text-3xl font-bold text-gray-800">IPO Pooling Fund Manager</h1>
+                <p className="text-gray-600 text-sm">Track multiple IPO projects over time</p>
+              </div>
             </div>
-
-            {/* Public Sharing Status */}
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-2">
-                {isOnline ? (
-                  <Cloud className="h-5 w-5 text-green-500" />
-                ) : (
-                  <CloudOff className="h-5 w-5 text-red-500" />
-                )}
-                <span className="text-sm text-gray-600">
-                  {isOnline ? "Online" : "Offline"}
-                </span>
-              </div>
-
-              <div className="flex items-center space-x-2 px-3 py-1 bg-green-100 rounded">
-                <Cloud className="h-4 w-4 text-green-600" />
-                <span className="text-sm text-green-700 font-medium">
-                  Cloud Storage Enabled
-                </span>
-              </div>
+            
+            <div className="flex gap-2">
+              <button
+                onClick={createNewProject}
+                className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
+              >
+                <PlusCircle className="w-5 h-5" />
+                New
+              </button>
+              <button
+                onClick={saveCurrentProject}
+                className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                <Save className="w-5 h-5" />
+                Save
+              </button>
+              <button
+                onClick={() => setShowProjectList(!showProjectList)}
+                className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors"
+              >
+                <FolderOpen className="w-5 h-5" />
+                Projects ({savedProjects.length})
+              </button>
             </div>
           </div>
+          
+          {ipoDetails.name && (
+            <div className="mt-3 text-sm text-gray-600">
+              Current: <span className="font-semibold text-indigo-600">{ipoDetails.name}</span>
+              {currentProjectId && <span className="ml-2 text-green-600">● Saved</span>}
+            </div>
+          )}
         </div>
-      </div>
 
-      {/* Navigation Tabs */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="border-b border-gray-200">
-          <nav className="-mb-px flex space-x-8">
-            {[
-              { id: "ipo", label: "IPO Details", icon: DollarSign },
-              { id: "participants", label: "Participants", icon: Users },
-              { id: "transfers", label: "Fund Transfers", icon: Calculator },
-              { id: "results", label: "Results", icon: TrendingUp },
-              { id: "projects", label: "Saved Projects", icon: Save },
-            ].map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                onClick={() => setActiveTab(id)}
-                className={`flex items-center space-x-2 py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === id
-                    ? "border-indigo-500 text-indigo-600"
-                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                }`}
-              >
-                <Icon className="h-5 w-5" />
-                <span>{label}</span>
-              </button>
-            ))}
-          </nav>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === "ipo" && (
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-xl font-semibold mb-4">IPO Details</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {[
-                { key: "companyName", label: "Company Name", type: "text" },
-                { key: "ipoPrice", label: "IPO Price (RM)", type: "number" },
-                { key: "lotSize", label: "Lot Size (shares)", type: "number" },
-                { key: "listingDate", label: "Listing Date", type: "date" },
-                {
-                  key: "expectedReturn",
-                  label: "Expected Return (%)",
-                  type: "number",
-                },
-              ].map(({ key, label, type }) => (
-                <div key={key}>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    {label}
-                  </label>
-                  <input
-                    type={type}
-                    value={ipoDetails[key]}
-                    onChange={(e) =>
-                      setIpoDetails({ ...ipoDetails, [key]: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {activeTab === "participants" && (
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold">Participants</h2>
-              <button
-                onClick={addParticipant}
-                className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-              >
-                <Plus className="h-4 w-4" />
-                <span>Add Participant</span>
-              </button>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="min-w-full border border-gray-300">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="border px-3 py-2 text-left font-semibold">
-                      Name
-                    </th>
-                    <th className="border px-3 py-2 text-right font-semibold">
-                      Initial Capital (RM)
-                    </th>
-                    <th className="border px-3 py-2 text-center font-semibold">
-                      Will Apply?
-                    </th>
-                    <th className="border px-3 py-2 text-right font-semibold">
-                      Lots Applied
-                    </th>
-                    <th className="border px-3 py-2 text-center font-semibold">
-                      Use All Capital
-                    </th>
-                    <th className="border px-3 py-2 text-right font-semibold">
-                      Capital Used
-                    </th>
-                    <th className="border px-3 py-2 text-center font-semibold">
-                      Got Allocation?
-                    </th>
-                    <th className="border px-3 py-2 text-right font-semibold">
-                      Lots Allocated
-                    </th>
-                    <th className="border px-3 py-2 text-right font-semibold">
-                      Allocated Amount
-                    </th>
-                    <th className="border px-3 py-2 text-right font-semibold">
-                      Selling Price (per share)
-                    </th>
-                    <th className="border px-3 py-2 text-right font-semibold">
-                      Selling Fee (RM)
-                    </th>
-                    <th className="border px-3 py-2 text-right font-semibold">
-                      Net Profit/Loss
-                    </th>
-                    <th className="border px-3 py-2 text-center font-semibold">
-                      Action
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {participants.map((p) => {
-                    const details = calculateParticipantDetails(p);
-                    return (
-                      <tr key={p.id}>
-                        <td className="border px-3 py-2">
-                          <input
-                            type="text"
-                            value={p.name}
-                            onChange={(e) =>
-                              updateParticipant(p.id, "name", e.target.value)
-                            }
-                            list={`names-${p.id}`}
-                            className="w-32 px-2 py-1 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                            placeholder="Enter name"
-                          />
-                          <datalist id={`names-${p.id}`}>
-                            {savedNames.map((name, index) => (
-                              <option key={index} value={name} />
-                            ))}
-                          </datalist>
-                        </td>
-                        <td className="border px-3 py-2">
-                          <input
-                            type="number"
-                            value={p.initialCapital}
-                            onChange={(e) =>
-                              updateParticipant(
-                                p.id,
-                                "initialCapital",
-                                e.target.value
-                              )
-                            }
-                            className="w-24 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                          />
-                        </td>
-                        <td className="border px-3 py-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={p.willApply}
-                            onChange={(e) =>
-                              updateParticipant(
-                                p.id,
-                                "willApply",
-                                e.target.checked
-                              )
-                            }
-                            className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-                          />
-                        </td>
-                        <td className="border px-3 py-2">
-                          <input
-                            type="number"
-                            value={p.lotsApplied}
-                            onChange={(e) =>
-                              updateParticipant(
-                                p.id,
-                                "lotsApplied",
-                                e.target.value
-                              )
-                            }
-                            disabled={!p.willApply}
-                            className="w-20 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
-                          />
-                        </td>
-                        <td className="border px-3 py-2 text-center">
-                          <button
-                            onClick={() => useAllCapital(p.id)}
-                            disabled={
-                              !p.willApply ||
-                              !ipoDetails.ipoPrice ||
-                              !ipoDetails.lotSize
-                            }
-                            className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                            title="Calculate max lots from available capital"
-                          >
-                            Max
-                          </button>
-                        </td>
-                        <td className="border px-3 py-2 text-right">
-                          RM {details.capitalUsedToApply.toFixed(2)}
-                        </td>
-                        <td className="border px-3 py-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={p.gotAllocation}
-                            onChange={(e) =>
-                              updateParticipant(
-                                p.id,
-                                "gotAllocation",
-                                e.target.checked
-                              )
-                            }
-                            disabled={!p.willApply}
-                            className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded disabled:bg-gray-100"
-                          />
-                        </td>
-                        <td className="border px-3 py-2">
-                          <input
-                            type="number"
-                            value={p.lotsAllocated}
-                            onChange={(e) =>
-                              updateParticipant(
-                                p.id,
-                                "lotsAllocated",
-                                e.target.value
-                              )
-                            }
-                            disabled={!p.gotAllocation}
-                            className="w-20 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
-                          />
-                        </td>
-                        <td className="border px-3 py-2 text-right">
-                          RM {details.allocatedAmount.toFixed(2)}
-                        </td>
-                        <td className="border px-3 py-2">
-                          <input
-                            type="number"
-                            value={p.sellingPrice}
-                            onChange={(e) =>
-                              updateParticipant(
-                                p.id,
-                                "sellingPrice",
-                                e.target.value
-                              )
-                            }
-                            disabled={!p.gotAllocation}
-                            className="w-24 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
-                          />
-                        </td>
-                        <td className="border px-3 py-2">
-                          <input
-                            type="number"
-                            value={p.sellingFee}
-                            onChange={(e) =>
-                              updateParticipant(
-                                p.id,
-                                "sellingFee",
-                                e.target.value
-                              )
-                            }
-                            disabled={!p.gotAllocation}
-                            placeholder="0.00"
-                            className="w-24 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
-                          />
-                        </td>
-                        <td className="border px-3 py-2 text-right">
-                          <span
-                            className={
-                              details.netProfit >= 0
-                                ? "text-green-600 font-semibold"
-                                : "text-red-600 font-semibold"
-                            }
-                          >
-                            RM {details.netProfit.toFixed(2)}
-                          </span>
-                        </td>
-                        <td className="border px-3 py-2 text-center">
-                          <button
-                            onClick={() => removeParticipant(p.id)}
-                            className="p-1 text-red-600 hover:text-red-800"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {activeTab === "transfers" && (
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold">Fund Transfers</h2>
-              <button
-                onClick={addTransfer}
-                className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-              >
-                <Plus className="h-4 w-4" />
-                <span>Add Transfer</span>
-              </button>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="min-w-full border border-gray-300">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="border px-3 py-2 text-left font-semibold">
-                      From
-                    </th>
-                    <th className="border px-3 py-2 text-left font-semibold">
-                      To
-                    </th>
-                    <th className="border px-3 py-2 text-right font-semibold">
-                      Amount (RM)
-                    </th>
-                    <th className="border px-3 py-2 text-left font-semibold">
-                      Reason
-                    </th>
-                    <th className="border px-3 py-2 text-center font-semibold">
-                      Action
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {transfers.map((t) => (
-                    <tr key={t.id}>
-                      <td className="border px-3 py-2">
-                        <select
-                          value={t.from}
-                          onChange={(e) =>
-                            updateTransfer(t.id, "from", e.target.value)
-                          }
-                          className="w-full px-2 py-1 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                        >
-                          <option value="">Select participant</option>
-                          {participants.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name || `Participant ${p.id}`}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="border px-3 py-2">
-                        <select
-                          value={t.to}
-                          onChange={(e) =>
-                            updateTransfer(t.id, "to", e.target.value)
-                          }
-                          className="w-full px-2 py-1 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                        >
-                          <option value="">Select participant</option>
-                          {participants.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name || `Participant ${p.id}`}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="border px-3 py-2">
-                        <input
-                          type="number"
-                          value={t.amount}
-                          onChange={(e) =>
-                            updateTransfer(t.id, "amount", e.target.value)
-                          }
-                          className="w-24 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                        />
-                      </td>
-                      <td className="border px-3 py-2">
-                        <input
-                          type="text"
-                          value={t.reason}
-                          onChange={(e) =>
-                            updateTransfer(t.id, "reason", e.target.value)
-                          }
-                          placeholder="e.g., Loan for IPO application"
-                          className="w-full px-2 py-1 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                        />
-                      </td>
-                      <td className="border px-3 py-2 text-center">
-                        <button
-                          onClick={() => removeTransfer(t.id)}
-                          className="p-1 text-red-600 hover:text-red-800"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {activeTab === "results" && (
-          <div className="space-y-6">
-            {/* Save to Cloud Button */}
-            <div className="flex justify-end">
-              <button
-                onClick={() => {
-                  const projectName = ipoDetails.companyName || "IPO Project";
-                  saveToPublic(projectName);
-                }}
-                disabled={isLoadingPublic}
-                className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-              >
-                {isLoadingPublic ? (
-                  <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
-                ) : (
-                  <Cloud className="h-4 w-4" />
-                )}
-                <span>Save to Cloud</span>
-              </button>
-            </div>
-
-            {/* Summary */}
-            <div className="bg-white rounded-lg shadow p-6">
-              <h2 className="text-xl font-semibold mb-4">Pool Summary</h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-gray-50 p-4 rounded">
-                  <h3 className="font-medium text-gray-700">Total Capital</h3>
-                  <p className="text-2xl font-bold text-gray-900">
-                    RM {totalCapital.toFixed(2)}
-                  </p>
-                </div>
-                <div className="bg-gray-50 p-4 rounded">
-                  <h3 className="font-medium text-gray-700">Capital Used</h3>
-                  <p className="text-2xl font-bold text-gray-900">
-                    RM {totalCapitalUsed.toFixed(2)}
-                  </p>
-                </div>
-                <div className="bg-gray-50 p-4 rounded">
-                  <h3 className="font-medium text-gray-700">Total P&L</h3>
-                  <p
-                    className={`text-2xl font-bold ${
-                      totalProfitLoss >= 0 ? "text-green-600" : "text-red-600"
-                    }`}
-                  >
-                    RM {totalProfitLoss.toFixed(2)}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Distribution */}
-            <div className="bg-white rounded-lg shadow p-6">
-              <h2 className="text-xl font-semibold mb-4">IPO Distribution Table</h2>
-              <div className="overflow-x-auto">
-                <table className="min-w-full border border-gray-300">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="border px-3 py-2 text-left font-semibold">Name</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Capital</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Capital %</th>
-                      <th className="border px-3 py-2 text-center font-semibold">Status</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Selling Price</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Selling Fee</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Actual Profit Received</th>
-                      <th className="border px-3 py-2 text-left font-semibold">Formula Breakdown</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Your Profit Share</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Settlement Transfer Out</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Settlement Transfer In</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Tier Matching Return</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Final Amount</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Profit on Capital ROI</th>
-                      <th className="border px-3 py-2 text-right font-semibold">Normal ROI</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {distribution.map((p) => {
-                      const details = calculateParticipantDetails(p);
-                      const status = p.gotAllocation ? `Got ${p.lotsAllocated} lots ✓` : "Applied";
-                      const statusBg = p.gotAllocation ? "bg-green-100" : "bg-yellow-100";
-                      
-                      return (
-                        <tr key={p.id}>
-                          <td className="border px-3 py-2 font-medium">
-                            {p.name || `Participant ${p.id}`}
-                          </td>
-                          <td className="border px-3 py-2 text-right">
-                            RM {Number(p.initialCapital || 0).toFixed(2)}
-                          </td>
-                          <td className="border px-3 py-2 text-right">
-                            {(p.capitalShare * 100).toFixed(2)}%
-                          </td>
-                          <td className={`border px-3 py-2 text-center ${statusBg} rounded`}>
-                            {status}
-                          </td>
-                          <td className="border px-3 py-2 text-right">
-                            {p.gotAllocation ? `RM ${Number(p.sellingPrice || 0).toFixed(2)}` : "-"}
-                          </td>
-                          <td className="border px-3 py-2 text-right">
-                            {p.gotAllocation ? (
-                              <span className="text-red-600">
-                                -RM {Number(p.sellingFee || 0).toFixed(2)}
-                              </span>
-                            ) : "-"}
-                          </td>
-                          <td className="border px-3 py-2 text-right">
-                            {p.gotAllocation ? `RM ${details.netSellingAmount.toFixed(2)}` : "-"}
-                          </td>
-                          <td className="border px-3 py-2 text-left text-sm">
-                            {`(${(p.capitalShare * 100).toFixed(1)}% x RM ${totalProfitLoss.toFixed(2)}) = RM ${p.profitShare.toFixed(2)}`}
-                          </td>
-                          <td className="border px-3 py-2 text-right">
-                            <span className="text-green-600">
-                              RM {p.profitShare.toFixed(2)}
-                            </span>
-                          </td>
-                          <td className="border px-3 py-2 text-right">
-                            {p.gotAllocation ? (
-                              <span className="text-red-600">
-                                -RM {(details.netSellingAmount - p.profitShare).toFixed(2)}
-                              </span>
-                            ) : "-"}
-                          </td>
-                          <td className="border px-3 py-2 text-right">
-                            {!p.gotAllocation ? (
-                              <span className="text-green-600">
-                                +RM {p.profitShare.toFixed(2)}
-                              </span>
-                            ) : "-"}
-                          </td>
-                          <td className="border px-3 py-2 text-right">-</td>
-                          <td className="border px-3 py-2 text-right font-bold">
-                            <span className="text-green-600">
-                              RM {p.netPosition.toFixed(2)}
-                            </span>
-                          </td>
-                          <td className="border px-3 py-2 text-right font-medium">
-                            {p.capitalUsedToApply > 0 ? (
-                              <span
-                                className={
-                                  p.profitShare >= 0
-                                    ? "text-green-600"
-                                    : "text-red-600"
-                                }
-                              >
-                                {(
-                                  (p.profitShare / p.capitalUsedToApply) *
-                                  100
-                                ).toFixed(2)}
-                                %
-                              </span>
-                            ) : (
-                              "-"
-                            )}
-                          </td>
-                          <td className="border px-3 py-2 text-right font-medium">
-                            {p.allocatedAmount > 0 ? (
-                              <span
-                                className={
-                                  p.netProfit >= 0
-                                    ? "text-green-600"
-                                    : "text-red-600"
-                                }
-                              >
-                                {(
-                                  (p.netProfit / p.allocatedAmount) *
-                                  100
-                                ).toFixed(2)}
-                                %
-                              </span>
-                            ) : (
-                              "-"
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot className="bg-gray-50">
-                    <tr>
-                      <td className="border px-3 py-2 font-bold text-base">TOTAL</td>
-                      <td className="border px-3 py-2 text-right text-base">
-                        RM {totalCapital.toFixed(2)}
-                      </td>
-                      <td className="border px-3 py-2 text-right text-base">100%</td>
-                      <td className="border px-3 py-2 text-center text-base"></td>
-                      <td className="border px-3 py-2 text-right text-base"></td>
-                      <td className="border px-3 py-2 text-right text-base">
-                        <span className="text-red-600">
-                          -RM {distribution.reduce((sum, p) => {
-                            const details = calculateParticipantDetails(p);
-                            return sum + Number(p.sellingFee || 0);
-                          }, 0).toFixed(2)}
-                        </span>
-                      </td>
-                      <td className="border px-3 py-2 text-right text-base">
-                        RM {distribution.reduce((sum, p) => {
-                          const details = calculateParticipantDetails(p);
-                          return sum + details.netSellingAmount;
-                        }, 0).toFixed(2)}
-                      </td>
-                      <td className="border px-3 py-2 text-left text-base"></td>
-                      <td className="border px-3 py-2 text-right text-base">
-                        <span className="text-green-600">
-                          RM {totalProfitLoss.toFixed(2)}
-                        </span>
-                      </td>
-                      <td className="border px-3 py-2 text-right text-base"></td>
-                      <td className="border px-3 py-2 text-right text-base"></td>
-                      <td className="border px-3 py-2 text-right text-base"></td>
-                      <td className="border px-3 py-2 text-right text-base">
-                        <span className="text-green-600">
-                          RM {totalProfitLoss.toFixed(2)}
-                        </span>
-                      </td>
-                      <td className="border px-3 py-2 text-right text-base">
-                        {totalCapitalUsed > 0 ? (
-                          <span
-                            className={
-                              totalProfitLoss >= 0
-                                ? "text-green-600"
-                                : "text-red-600"
-                            }
-                          >
-                            {(
-                              (totalProfitLoss / totalCapitalUsed) *
-                              100
-                            ).toFixed(2)}
-                            %
-                          </span>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                      <td className="border px-3 py-2 text-right text-base">
-                        {totalCapitalUsed > 0 ? (
-                          <span
-                            className={
-                              totalProfitLoss >= 0
-                                ? "text-green-600"
-                                : "text-red-600"
-                            }
-                          >
-                            {(
-                              (totalProfitLoss / totalCapitalUsed) *
-                              100
-                            ).toFixed(2)}
-                            %
-                          </span>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-
-              <div className="mt-4 p-4 bg-blue-50 rounded-lg">
-                <h3 className="font-semibold text-blue-900 mb-2">
-                  📊 How This Works:
-                </h3>
-                <p className="text-blue-800 text-sm mb-2">
-                  • <strong>Capital Share:</strong> Your percentage of total
-                  pool capital
-                </p>
-                <p className="text-blue-800 text-sm mb-2">
-                  • <strong>Profit Share:</strong> Your share of total
-                  profit/loss based on capital contribution
-                </p>
-                <p className="text-blue-800 text-sm mb-2">
-                  • <strong>Final Amount:</strong> Your initial capital + profit
-                  share
-                </p>
-                <p className="text-blue-800 text-sm mb-2">
-                  • <strong>Profit on Capital ROI:</strong> Profit percentage
-                  based on total capital used for IPO application
-                </p>
-                <p className="text-blue-800 text-sm">
-                  • <strong>Normal ROI:</strong> Profit percentage based on
-                  allocated capital (only for those who got shares)
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === "projects" && (
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-semibold">Project Management</h2>
-              <div className="flex space-x-2">
-                <button
-                  onClick={saveProject}
-                  className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-                >
-                  <Save className="h-4 w-4" />
-                  <span>Save Current</span>
-                </button>
+        {showProjectList && (
+          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-gray-800">Saved IPO Projects</h2>
+              <div className="flex gap-2">
+                <label className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors cursor-pointer">
+                  <Upload className="w-5 h-5" />
+                  Import
+                  <input type="file" accept=".json" onChange={importData} className="hidden" />
+                </label>
                 <button
                   onClick={exportData}
-                  className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                  disabled={savedProjects.length === 0}
+                  className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400"
                 >
-                  <Download className="h-4 w-4" />
-                  <span>Export</span>
+                  <Download className="w-5 h-5" />
+                  Export All
                 </button>
-                <label className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 cursor-pointer">
-                  <Upload className="h-4 w-4" />
-                  <span>Import</span>
-                  <input
-                    type="file"
-                    accept=".json"
-                    onChange={importData}
-                    className="hidden"
-                  />
-                </label>
               </div>
             </div>
 
-            {/* Local Projects */}
-            <div className="mb-8">
-              <h3 className="text-lg font-medium mb-4">💾 Local Projects</h3>
-              {savedProjects.length === 0 ? (
-                <p className="text-gray-500 italic">
-                  No local projects saved yet
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {savedProjects.map((project) => (
-                    <div
-                      key={project.name}
-                      className="flex justify-between items-center p-3 border rounded-lg"
-                    >
+            {savedProjects.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                No saved projects yet. Save your current project to see it here.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {savedProjects.map(project => (
+                  <div key={project.id} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
+                    <div className="flex items-start justify-between mb-2">
                       <div>
-                        <h4 className="font-medium">{project.name}</h4>
-                        <p className="text-sm text-gray-500">
-                          {new Date(project.timestamp).toLocaleString()}
+                        <h3 className="font-bold text-lg text-gray-800">{project.ipoDetails.name || 'Untitled'}</h3>
+                        <p className="text-xs text-gray-500 mt-1">
+                          Saved: {new Date(project.savedDate).toLocaleString()}
                         </p>
                       </div>
-                      <div className="flex space-x-2">
-                        <button
-                          onClick={() => loadProject(project)}
-                          className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-                        >
-                          Load
-                        </button>
-                        <button
-                          onClick={() => deleteProject(project.name)}
-                          className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
-                        >
-                          Delete
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => deleteProject(project.id)}
+                        className="text-red-600 hover:text-red-700 p-2"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </button>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                    
+                    <div className="text-sm text-gray-600 mb-3">
+                      <p>• {project.participants.length} participants</p>
+                      <p>• Total capital: RM {project.participants.reduce((s, p) => s + Number(p.initialCapital), 0).toLocaleString()}</p>
+                    </div>
 
-            {/* Storage Information */}
-            <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
-              <h3 className="font-semibold text-green-800 mb-2">
-                ☁️ Cloud Storage Active
-              </h3>
-              <p className="text-green-700 text-sm mb-2">
-                <strong>Using:</strong> Supabase cloud database (shared with
-                everyone!)
-              </p>
-              <p className="text-green-700 text-sm mb-2">
-                <strong>Features:</strong> Real-time sharing, cross-device
-                access, persistent storage
-              </p>
-              <p className="text-green-700 text-sm">
-                <strong>Status:</strong> Anyone can save and load projects from
-                anywhere
-              </p>
-            </div>
-
-            {/* Public Projects */}
-            <div>
-              <h3 className="text-lg font-medium mb-4">
-                🌐 Public Projects (Cloud Storage)
-              </h3>
-              {publicProjects.length === 0 ? (
-                <p className="text-gray-500 italic">
-                  No public projects saved yet. Projects are saved to the cloud
-                  and shared with everyone!
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {publicProjects.map((project) => (
-                    <div
-                      key={project.id}
-                      className="flex justify-between items-center p-3 border rounded-lg bg-green-50"
+                    <button
+                      onClick={() => loadProject(project)}
+                      className="w-full bg-indigo-600 text-white py-2 rounded-lg hover:bg-indigo-700 transition-colors"
                     >
-                      <div>
-                        <h4 className="font-medium">{project.name}</h4>
-                        <p className="text-sm text-gray-500">
-                          {new Date(project.timestamp).toLocaleString()} •
-                          Shared publicly
-                        </p>
-                      </div>
-                      <div className="flex space-x-2">
-                        <button
-                          onClick={() => loadFromPublic(project.id)}
-                          className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-                        >
-                          Load
-                        </button>
-                        <button
-                          onClick={() => deleteFromPublic(project.id)}
-                          className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                      Load Project
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
+
+        <div className="bg-white rounded-xl shadow-lg overflow-hidden mb-6">
+          <div className="flex border-b overflow-x-auto">
+            <button
+              onClick={() => setActiveTab('ipo')}
+              className={`flex-shrink-0 px-6 py-4 font-semibold transition-colors ${
+                activeTab === 'ipo'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <FileText className="w-5 h-5 inline mr-2" />
+              IPO Details
+            </button>
+            <button
+              onClick={() => setActiveTab('participants')}
+              className={`flex-shrink-0 px-6 py-4 font-semibold transition-colors ${
+                activeTab === 'participants'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <Users className="w-5 h-5 inline mr-2" />
+              Participants
+            </button>
+            <button
+              onClick={() => setActiveTab('transfers')}
+              className={`flex-shrink-0 px-6 py-4 font-semibold transition-colors ${
+                activeTab === 'transfers'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              Fund Transfers
+            </button>
+            <button
+              onClick={() => setActiveTab('results')}
+              className={`flex-shrink-0 px-6 py-4 font-semibold transition-colors ${
+                activeTab === 'results'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <Calculator className="w-5 h-5 inline mr-2" />
+              Distribution
+            </button>
+          </div>
+
+          <div className="p-6">
+            {activeTab === 'ipo' && (
+              <div>
+                <h2 className="text-xl font-bold text-gray-800 mb-4">IPO Information</h2>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">IPO Name *</label>
+                    <input
+                      type="text"
+                      value={ipoDetails.name}
+                      onChange={(e) => setIpoDetails({ ...ipoDetails, name: e.target.value })}
+                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      placeholder="e.g., ABC Company Bhd"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Application Date</label>
+                    <input
+                      type="date"
+                      value={ipoDetails.applicationDate}
+                      onChange={(e) => setIpoDetails({ ...ipoDetails, applicationDate: e.target.value })}
+                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">IPO Price (RM per share) *</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={ipoDetails.ipoPrice}
+                      onChange={(e) => setIpoDetails({ ...ipoDetails, ipoPrice: e.target.value })}
+                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      placeholder="e.g., 1.50"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Lot Size (shares per lot)
+                      <span className="text-xs text-gray-500 ml-1">- Usually 100</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={ipoDetails.lotSize}
+                      onChange={(e) => setIpoDetails({ ...ipoDetails, lotSize: e.target.value })}
+                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      placeholder="e.g., 100"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                  <div className="bg-blue-50 rounded-lg p-4 border-l-4 border-blue-500">
+                    <div className="text-xs text-blue-600 font-medium mb-1">Total Pool Capital</div>
+                    <div className="text-xl font-bold text-blue-900">RM {totalCapital.toLocaleString()}</div>
+                    <div className="text-xs text-blue-600 mt-1">{participants.length} participants</div>
+                  </div>
+                  
+                  <div className="bg-purple-50 rounded-lg p-4 border-l-4 border-purple-500">
+                    <div className="text-xs text-purple-600 font-medium mb-1">Total Applied</div>
+                    <div className="text-xl font-bold text-purple-900">{totalLotsApplied.toLocaleString()} lots</div>
+                    <div className="text-xs text-purple-600">RM {totalCapitalUsed.toLocaleString()}</div>
+                  </div>
+
+                  {hasAllocationData && (
+                    <div className="bg-green-50 rounded-lg p-4 border-l-4 border-green-500">
+                      <div className="text-xs text-green-600 font-medium mb-1">Total Allocated</div>
+                      <div className="text-xl font-bold text-green-900">{totalLotsAllocated.toLocaleString()} lots</div>
+                      <div className="text-xs text-green-600">RM {totalAllocated.toLocaleString()}</div>
+                    </div>
+                  )}
+
+                  {hasSellingPrice && (
+                    <div className={`rounded-lg p-4 border-l-4 ${totalProfitLoss >= 0 ? 'bg-emerald-50 border-emerald-500' : 'bg-red-50 border-red-500'}`}>
+                      <div className={`text-xs font-medium mb-1 ${totalProfitLoss >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        Total {totalProfitLoss >= 0 ? 'Profit' : 'Loss'}
+                      </div>
+                      <div className={`text-xl font-bold ${totalProfitLoss >= 0 ? 'text-emerald-900' : 'text-red-900'}`}>
+                        RM {Math.abs(totalProfitLoss).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {whoApplied.length > 0 && (
+                  <div className="bg-white border rounded-lg p-4">
+                    <h3 className="font-bold text-gray-800 mb-3">Applications Summary</h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b">
+                            <th className="text-left py-2 px-3 font-semibold text-gray-700">Participant</th>
+                            <th className="text-right py-2 px-3 font-semibold text-gray-700">Initial Capital</th>
+                            <th className="text-right py-2 px-3 font-semibold text-gray-700">Lots Applied</th>
+                            <th className="text-right py-2 px-3 font-semibold text-gray-700">Capital Used</th>
+                            {hasAllocationData && (
+                              <>
+                                <th className="text-center py-2 px-3 font-semibold text-gray-700">Status</th>
+                                <th className="text-right py-2 px-3 font-semibold text-gray-700">Lots Allocated</th>
+                                <th className="text-right py-2 px-3 font-semibold text-gray-700">Selling Price</th>
+                              </>
+                            )}
+                            {hasSellingPrice && (
+                              <th className="text-right py-2 px-3 font-semibold text-gray-700">Profit/Loss</th>
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {participants.filter(p => p.willApply).map(p => {
+                            const details = calculateParticipantDetails(p);
+                            return (
+                              <tr key={p.id} className="border-b hover:bg-gray-50">
+                                <td className="py-2 px-3 font-medium">{p.name}</td>
+                                <td className="py-2 px-3 text-right text-gray-600">RM {Number(p.initialCapital).toLocaleString()}</td>
+                                <td className="py-2 px-3 text-right font-medium">{p.lotsApplied}</td>
+                                <td className="py-2 px-3 text-right text-purple-600 font-semibold">RM {details.capitalUsedToApply.toLocaleString()}</td>
+                                {hasAllocationData && (
+                                  <>
+                                    <td className="py-2 px-3 text-center">
+                                      {p.gotAllocation ? (
+                                        <span className="bg-green-200 px-2 py-1 rounded text-xs">✓ Got</span>
+                                      ) : (
+                                        <span className="bg-yellow-200 px-2 py-1 rounded text-xs">No</span>
+                                      )}
+                                    </td>
+                                    <td className="py-2 px-3 text-right font-medium text-green-600">
+                                      {p.gotAllocation ? p.lotsAllocated : '-'}
+                                    </td>
+                                    <td className="py-2 px-3 text-right font-medium text-blue-600">
+                                      {p.gotAllocation && Number(p.sellingPrice) > 0 ? `RM ${Number(p.sellingPrice).toFixed(2)}` : '-'}
+                                    </td>
+                                  </>
+                                )}
+                                {hasSellingPrice && (
+                                  <td className={`py-2 px-3 text-right font-bold ${details.profitLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {p.gotAllocation && Number(p.sellingPrice) > 0 ? `RM ${details.profitLoss.toFixed(2)}` : '-'}
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    
+                    {participants.filter(p => !p.willApply).length > 0 && (
+                      <div className="mt-3 text-sm text-gray-600">
+                        <strong>Capital Only (Not Applying):</strong> {participants.filter(p => !p.willApply).map(p => p.name).join(', ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'participants' && (
+              <div>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold text-gray-800">Participants Management</h2>
+                  <button
+                    onClick={addParticipant}
+                    className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
+                  >
+                    <PlusCircle className="w-5 h-5" />
+                    Add Participant
+                  </button>
+                </div>
+
+                <div className="bg-blue-50 border-l-4 border-blue-500 p-4 mb-4">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
+                    <div className="text-sm text-blue-800">
+                      <p className="font-semibold mb-1">How to fill:</p>
+                      <p>1. Enter name and initial capital for all participants</p>
+                      <p>2. Uncheck "Will Apply" for those who only provide capital</p>
+                      <p>3. Enter lots applied manually OR click "Max" button to use all available capital</p>
+                      <p>4. After allocation results: Check "Got Allocation" and enter lots allocated</p>
+                      <p>5. After selling: Enter each person's selling price and selling fee (brokerage charges)</p>
+                      <p>6. Net Profit auto-calculates: Gross Profit - Selling Fee</p>
+                      <p className="mt-2 text-xs bg-blue-100 p-2 rounded">
+                        💡 <strong>Max Button:</strong> Calculates maximum lots based on: Initial Capital ÷ (IPO Price × Lot Size)
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse min-w-max">
+                    <thead>
+                      <tr className="bg-gray-100">
+                        <th className="border px-3 py-2 text-left font-semibold">Name</th>
+                        <th className="border px-3 py-2 text-right font-semibold">Initial Capital</th>
+                        <th className="border px-3 py-2 text-center font-semibold">Will Apply?</th>
+                        <th className="border px-3 py-2 text-right font-semibold">Lots Applied</th>
+                        <th className="border px-3 py-2 text-center font-semibold">Use All Capital</th>
+                        <th className="border px-3 py-2 text-right font-semibold">Capital Used</th>
+                        <th className="border px-3 py-2 text-center font-semibold">Got Allocation?</th>
+                        <th className="border px-3 py-2 text-right font-semibold">Lots Allocated</th>
+                        <th className="border px-3 py-2 text-right font-semibold">Allocated Amount</th>
+                        <th className="border px-3 py-2 text-right font-semibold">Selling Price (per share)</th>
+                        <th className="border px-3 py-2 text-right font-semibold">Selling Fee (RM)</th>
+                        <th className="border px-3 py-2 text-right font-semibold">Net Profit/Loss</th>
+                        <th className="border px-3 py-2 text-center font-semibold">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {participants.map(p => {
+                        const details = calculateParticipantDetails(p);
+                        const maxLots = calculateMaxLots(p.initialCapital, ipoDetails.ipoPrice, ipoDetails.lotSize);
+                        return (
+                          <tr key={p.id} className="hover:bg-gray-50">
+                            <td className="border px-3 py-2">
+                              <input
+                                type="text"
+                                value={p.name}
+                                onChange={(e) => updateParticipant(p.id, 'name', e.target.value)}
+                                className="w-full px-2 py-1 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                              />
+                            </td>
+                            <td className="border px-3 py-2">
+                              <input
+                                type="number"
+                                value={p.initialCapital}
+                                onChange={(e) => updateParticipant(p.id, 'initialCapital', e.target.value)}
+                                className="w-24 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                              />
+                            </td>
+                            <td className="border px-3 py-2 text-center">
+                              <input
+                                type="checkbox"
+                                checked={p.willApply}
+                                onChange={(e) => updateParticipant(p.id, 'willApply', e.target.checked)}
+                                className="w-5 h-5 text-indigo-600 rounded"
+                              />
+                            </td>
+                            <td className="border px-3 py-2">
+                              <input
+                                type="number"
+                                value={p.lotsApplied}
+                                onChange={(e) => updateParticipant(p.id, 'lotsApplied', e.target.value)}
+                                disabled={!p.willApply}
+                                className="w-20 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
+                              />
+                            </td>
+                            <td className="border px-3 py-2 text-center">
+                              <button
+                                onClick={() => applyMaxLots(p.id)}
+                                disabled={!p.willApply || !ipoDetails.ipoPrice || !ipoDetails.lotSize}
+                                className="bg-blue-500 text-white px-3 py-1 rounded text-xs hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                                title={`Max: ${maxLots} lots`}
+                              >
+                                Max ({maxLots})
+                              </button>
+                            </td>
+                            <td className="border px-3 py-2 text-right text-sm text-gray-600">
+                              {details.capitalUsedToApply.toLocaleString()}
+                            </td>
+                            <td className="border px-3 py-2 text-center">
+                              <input
+                                type="checkbox"
+                                checked={p.gotAllocation}
+                                onChange={(e) => updateParticipant(p.id, 'gotAllocation', e.target.checked)}
+                                disabled={!p.willApply}
+                                className="w-5 h-5 text-green-600 rounded disabled:opacity-50"
+                              />
+                            </td>
+                            <td className="border px-3 py-2">
+                              <input
+                                type="number"
+                                value={p.lotsAllocated}
+                                onChange={(e) => updateParticipant(p.id, 'lotsAllocated', e.target.value)}
+                                disabled={!p.gotAllocation}
+                                className="w-20 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
+                              />
+                            </td>
+                            <td className="border px-3 py-2 text-right text-sm text-gray-600">
+                              {details.allocatedAmount.toLocaleString()}
+                            </td>
+                            <td className="border px-3 py-2">
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={p.sellingPrice}
+                                onChange={(e) => updateParticipant(p.id, 'sellingPrice', e.target.value)}
+                                disabled={!p.gotAllocation}
+                                className="w-20 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
+                                placeholder="0.00"
+                              />
+                            </td>
+                            <td className="border px-3 py-2">
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={p.sellingFee}
+                                onChange={(e) => updateParticipant(p.id, 'sellingFee', e.target.value)}
+                                disabled={!p.gotAllocation}
+                                className="w-20 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
+                                placeholder="0.00"
+                              />
+                            </td>
+                            <td className={`border px-3 py-2 text-right font-semibold ${details.profitLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {details.profitLoss.toFixed(2)}
+                            </td>
+                            <td className="border px-3 py-2 text-center">
+                              {participants.length > 1 && (
+                                <button
+                                  onClick={() => removeParticipant(p.id)}
+                                  className="text-red-600 hover:text-red-700"
+                                >
+                                  <MinusCircle className="w-5 h-5" />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'transfers' && (
+              <div>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold text-gray-800">Fund Transfers (Tier Matching)</h2>
+                  <button
+                    onClick={addTransfer}
+                    className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
+                    disabled={participants.length < 2}
+                  >
+                    <PlusCircle className="w-5 h-5" />
+                    Add Transfer
+                  </button>
+                </div>
+
+                {transfers.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    No transfers recorded. Add a transfer to track fund movements for tier matching between participants.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {transfers.map(t => (
+                      <div key={t.id} className="border rounded-lg p-4 bg-gray-50">
+                        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-center">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">From</label>
+                            <select
+                              value={t.from}
+                              onChange={(e) => updateTransfer(t.id, 'from', Number(e.target.value))}
+                              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            >
+                              {participants.map(p => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">To</label>
+                            <select
+                              value={t.to}
+                              onChange={(e) => updateTransfer(t.id, 'to', Number(e.target.value))}
+                              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            >
+                              {participants.map(p => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+                            <input
+                              type="number"
+                              value={t.amount}
+                              onChange={(e) => updateTransfer(t.id, 'amount', e.target.value)}
+                              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Reason</label>
+                            <input
+                              type="text"
+                              value={t.reason}
+                              onChange={(e) => updateTransfer(t.id, 'reason', e.target.value)}
+                              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                              placeholder="Tier matching"
+                            />
+                          </div>
+
+                          <div className="flex justify-end">
+                            <button
+                              onClick={() => removeTransfer(t.id)}
+                              className="text-red-600 hover:text-red-700 p-2"
+                            >
+                              <MinusCircle className="w-5 h-5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'results' && (
+              <div>
+                {!canShowDistribution ? (
+                  <div className="text-center py-12">
+                    <AlertCircle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                    <h3 className="text-xl font-semibold text-gray-700 mb-2">Distribution Not Available Yet</h3>
+                    <p className="text-gray-500 mb-4">
+                      {!hasAllocationData && "Mark who got allocation in Participants tab first."}
+                      {hasAllocationData && !hasSellingPrice && "Enter selling prices for participants who got allocation in Participants tab."}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg p-6 mb-6">
+                      <h2 className="text-2xl font-bold mb-2">{ipoDetails.name || 'IPO'} - Profit Distribution</h2>
+                      <div className="text-sm opacity-90">
+                        {ipoDetails.applicationDate && <span>Applied: {new Date(ipoDetails.applicationDate).toLocaleDateString()} • </span>}
+                        <span>IPO Price: RM {Number(ipoDetails.ipoPrice).toFixed(2)} • </span>
+                        <span>Total Pool: RM {totalCapital.toLocaleString()} • </span>
+                        <span>Total Profit: RM {totalProfitLoss.toFixed(2)}</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-blue-50 border-l-4 border-blue-500 p-4 mb-4">
+                      <h3 className="font-semibold text-blue-900 mb-3">📊 Distribution Formula Applied:</h3>
+                      {onlyCapitalProviders.length === 0 ? (
+                        <div className="text-sm text-blue-800 space-y-2">
+                          <p className="font-semibold">✓ Scenario 1: Everyone applies with CDS</p>
+                          <div className="bg-white rounded p-3 space-y-1">
+                            <p>• <strong>Total Profit:</strong> RM {totalProfitLoss.toFixed(2)}</p>
+                            <p>• <strong>10% Bonus Pool:</strong> RM {(totalProfitLoss * 0.1).toFixed(2)} ÷ {whoGotAllocation.length} winners = <span className="font-semibold">RM {(totalProfitLoss * 0.1 / whoGotAllocation.length).toFixed(2)} per winner</span></p>
+                            <p>• <strong>90% Main Pool:</strong> RM {(totalProfitLoss * 0.9).toFixed(2)} distributed by capital %</p>
+                          </div>
+                          <p className="text-xs italic mt-2">Each winner gets: (Capital % × 90% pool) + Bonus</p>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-blue-800 space-y-2">
+                          <p className="font-semibold">✓ Scenario 2: Some only provide capital</p>
+                          <div className="bg-white rounded p-3 space-y-1">
+                            <p>• <strong>Total Profit:</strong> RM {totalProfitLoss.toFixed(2)}</p>
+                            <p>• <strong>30% Applier Bonus:</strong> RM {(totalProfitLoss * 0.3).toFixed(2)} ÷ {whoApplied.length} appliers = <span className="font-semibold">RM {(totalProfitLoss * 0.3 / whoApplied.length).toFixed(2)} per applier</span></p>
+                            <p>• <strong>70% Capital Pool:</strong> RM {(totalProfitLoss * 0.7).toFixed(2)} distributed by capital %</p>
+                          </div>
+                          <p className="text-xs italic mt-2">Appliers get: (Capital % × 70% pool) + Applier bonus<br/>Capital-only get: (Capital % × 70% pool)</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="bg-purple-50 border-l-4 border-purple-500 p-4 mb-6">
+                      <h3 className="font-semibold text-purple-900 mb-2">📋 Understanding the Table:</h3>
+                      <div className="text-sm text-purple-800 grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <div>
+                          <p>• <strong>Selling Price:</strong> Individual selling price per share (can differ by person)</p>
+                          <p>• <strong>Selling Fee:</strong> Brokerage charges deducted from gross profit</p>
+                          <p>• <strong>Actual Profit Received:</strong> Net money received (Gross Profit - Selling Fee)</p>
+                          <p>• <strong>Your Profit Share:</strong> Your calculated portion based on capital % and rules</p>
+                          <p>• <strong>Settlement Transfer Out:</strong> Amount those with allocation must transfer to others</p>
+                          <p>• <strong>Settlement Transfer In:</strong> Amount you receive from those who got allocation</p>
+                        </div>
+                        <div>
+                          <p>• <strong>Tier Matching Return:</strong> Return borrowed funds for tier matching</p>
+                          <p>• <strong>Final Amount:</strong> What you keep after all transfers</p>
+                          <p>• <strong>Profit on Capital ROI:</strong> Return % based on your total capital contributed</p>
+                          <p>• <strong>Normal ROI:</strong> Return % based on actual capital used for this IPO</p>
+                          <p className="mt-2 text-xs italic bg-purple-100 p-2 rounded">💡 ROI perspectives: Profit on Capital shows overall return, Normal ROI shows IPO-specific efficiency</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto mb-6">
+                      <div className="bg-indigo-600 text-white px-4 py-3 font-bold text-lg mb-0 rounded-t-lg">
+                        📊 {ipoDetails.name || 'IPO'} - Distribution Table
+                      </div>
+                      <table className="w-full border-collapse text-sm">
+                        <thead>
+                          <tr className="bg-gray-100">
+                            <th className="border px-3 py-2 text-left font-semibold">Name</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Capital</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Capital %</th>
+                            <th className="border px-3 py-2 text-center font-semibold">Status</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Selling Price</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Selling Fee</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Actual Profit Received</th>
+                            <th className="border px-3 py-2 text-left font-semibold">Formula Breakdown</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Your Profit Share</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Settlement Transfer Out</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Settlement Transfer In</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Tier Matching Return</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Final Amount</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Profit on Capital ROI</th>
+                            <th className="border px-3 py-2 text-right font-semibold">Normal ROI</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {distribution.map(p => {
+                            let formulaBreakdown = '';
+                            if (onlyCapitalProviders.length === 0) {
+                              const mainPoolShare = (p.capitalPercent / 100) * (totalProfitLoss * 0.9);
+                              const bonus = p.gotAllocation ? (totalProfitLoss * 0.1) / whoGotAllocation.length : 0;
+                              formulaBreakdown = `(${p.capitalPercent.toFixed(1)}% × RM ${(totalProfitLoss * 0.9).toFixed(2)})${bonus > 0 ? ` + RM ${bonus.toFixed(2)} bonus` : ''}`;
+                            } else {
+                              const capitalPoolShare = (p.capitalPercent / 100) * (totalProfitLoss * 0.7);
+                              const applierBonus = p.willApply ? (totalProfitLoss * 0.3) / whoApplied.length : 0;
+                              formulaBreakdown = `(${p.capitalPercent.toFixed(1)}% × RM ${(totalProfitLoss * 0.7).toFixed(2)})${applierBonus > 0 ? ` + RM ${applierBonus.toFixed(2)} applier bonus` : ''}`;
+                            }
+                            
+                            // ROI Calculations
+                            const profitOnCapitalROI = Number(p.initialCapital) > 0 ? ((p.netPosition / Number(p.initialCapital)) * 100) : 0;
+                            const normalROI = p.capitalUsedToApply > 0 ? ((p.netPosition / p.capitalUsedToApply) * 100) : 0;
+                            
+                            return (
+                              <tr key={p.id} className="hover:bg-gray-50">
+                                <td className="border px-3 py-2 font-medium">{p.name}</td>
+                                <td className="border px-3 py-2 text-right">RM {Number(p.initialCapital).toLocaleString()}</td>
+                                <td className="border px-3 py-2 text-right font-medium">{p.capitalPercent.toFixed(2)}%</td>
+                                <td className="border px-3 py-2 text-center text-xs">
+                                  {!p.willApply && <span className="bg-gray-200 px-2 py-1 rounded">Capital Only</span>}
+                                  {p.willApply && !p.gotAllocation && <span className="bg-yellow-200 px-2 py-1 rounded">Applied</span>}
+                                  {p.gotAllocation && <span className="bg-green-200 px-2 py-1 rounded">Got {p.lotsAllocated} lots ✓</span>}
+                                </td>
+                                <td className="border px-3 py-2 text-right text-blue-600 font-medium">
+                                  {p.gotAllocation && Number(p.sellingPrice) > 0 ? `RM ${Number(p.sellingPrice).toFixed(2)}` : '-'}
+                                </td>
+                                <td className="border px-3 py-2 text-right text-red-600 text-xs">
+                                  {p.gotAllocation && Number(p.sellingFee) > 0 ? `-RM ${Number(p.sellingFee).toFixed(2)}` : '-'}
+                                </td>
+                                <td className="border px-3 py-2 text-right font-semibold text-blue-600">
+                                  {p.gotAllocation ? `RM ${p.actualProfitReceived.toFixed(2)}` : '-'}
+                                </td>
+                                <td className="border px-3 py-2 text-xs text-gray-700 font-mono bg-gray-50">
+                                  {formulaBreakdown}
+                                </td>
+                                <td className="border px-3 py-2 text-right text-green-600 font-bold">
+                                  RM {p.profitShare.toFixed(2)}
+                                </td>
+                                <td className="border px-3 py-2 text-right text-red-600 font-semibold">
+                                  {p.settlementTransferOut > 0 ? `-RM ${p.settlementTransferOut.toFixed(2)}` : '-'}
+                                </td>
+                                <td className="border px-3 py-2 text-right text-green-600 font-semibold">
+                                  {p.settlementTransferIn > 0 ? `+RM ${p.settlementTransferIn.toFixed(2)}` : '-'}
+                                </td>
+                                <td className="border px-3 py-2 text-right text-gray-600">
+                                  {p.tierMatchingTransferIn > 0 && `+RM ${p.tierMatchingTransferIn.toFixed(2)}`}
+                                  {p.tierMatchingTransferOut > 0 && `-RM ${p.tierMatchingTransferOut.toFixed(2)}`}
+                                  {p.tierMatchingTransferIn === 0 && p.tierMatchingTransferOut === 0 && '-'}
+                                </td>
+                                <td className="border px-3 py-2 text-right font-bold text-base">
+                                  <span className={p.netPosition >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                    RM {p.netPosition.toFixed(2)}
+                                  </span>
+                                </td>
+                                <td className="border px-3 py-2 text-right font-bold">
+                                  <span className={profitOnCapitalROI >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                    {profitOnCapitalROI.toFixed(2)}%
+                                  </span>
+                                </td>
+                                <td className="border px-3 py-2 text-right font-bold">
+                                  <span className={normalROI >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                    {p.capitalUsedToApply > 0 ? `${normalROI.toFixed(2)}%` : '-'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-gray-100 font-bold">
+                            <td className="border px-3 py-2">TOTAL</td>
+                            <td className="border px-3 py-2 text-right">RM {totalCapital.toLocaleString()}</td>
+                            <td className="border px-3 py-2 text-right">100%</td>
+                            <td className="border px-3 py-2"></td>
+                            <td className="border px-3 py-2"></td>
+                            <td className="border px-3 py-2 text-right text-red-600 text-xs">
+                              -RM {distribution.reduce((sum, p) => sum + Number(p.sellingFee || 0), 0).toFixed(2)}
+                            </td>
+                            <td className="border px-3 py-2 text-right text-blue-600">
+                              RM {distribution.reduce((sum, p) => sum + p.actualProfitReceived, 0).toFixed(2)}
+                            </td>
+                            <td className="border px-3 py-2"></td>
+                            <td className="border px-3 py-2 text-right text-green-600">
+                              RM {distribution.reduce((sum, p) => sum + p.profitShare, 0).toFixed(2)}
+                            </td>
+                            <td className="border px-3 py-2"></td>
+                            <td className="border px-3 py-2"></td>
+                            <td className="border px-3 py-2"></td>
+                            <td className="border px-3 py-2 text-right text-base">
+                              RM {distribution.reduce((sum, p) => sum + p.netPosition, 0).toFixed(2)}
+                            </td>
+                            <td className="border px-3 py-2 text-right">
+                              <span className={totalProfitLoss >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                {totalCapital > 0 ? `${((distribution.reduce((sum, p) => sum + p.netPosition, 0) / totalCapital) * 100).toFixed(2)}%` : '-'}
+                              </span>
+                            </td>
+                            <td className="border px-3 py-2 text-right">
+                              <span className={totalProfitLoss >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                {totalCapitalUsed > 0 ? `${((distribution.reduce((sum, p) => sum + p.netPosition, 0) / totalCapitalUsed) * 100).toFixed(2)}%` : '-'}
+                              </span>
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+
+                    <div className="p-5 bg-gradient-to-r from-yellow-50 to-orange-50 border-l-4 border-yellow-500 rounded-lg">
+                      <h3 className="font-bold text-yellow-900 mb-3 text-lg flex items-center gap-2">
+                        💰 Settlement Instructions (Transfers to Make)
+                      </h3>
+                      
+                      <div className="bg-white rounded-lg p-4 mb-4">
+                        <h4 className="font-semibold text-gray-800 mb-3">Step 1: Settlement Transfers (Profit Distribution)</h4>
+                        <p className="text-sm text-gray-600 mb-3">Those who got allocation must transfer profit shares to others:</p>
+                        <div className="space-y-2">
+                          {distribution
+                            .filter(p => p.settlementTransferOut > 0)
+                            .map(payer => {
+                              const receivers = distribution.filter(r => r.settlementTransferIn > 0);
+                              return receivers.map(receiver => {
+                                const amount = (receiver.profitShare / distribution.reduce((sum, p) => sum + (p.settlementTransferIn || 0), 0)) * payer.settlementTransferOut;
+                                if (amount > 0.01) {
+                                  return (
+                                    <div key={`${payer.id}-${receiver.id}`} className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
+                                      <div className="flex-1">
+                                        <span className="font-bold text-red-700">{payer.name}</span>
+                                        <span className="mx-2 text-gray-600">transfers profit to</span>
+                                        <span className="font-bold text-green-700">{receiver.name}</span>
+                                      </div>
+                                      <div className="font-bold text-lg text-indigo-600">
+                                        RM {amount.toFixed(2)}
+                                      </div>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              });
+                            })}
+                          {distribution.every(p => p.settlementTransferOut === 0) && (
+                            <p className="text-gray-500 text-center py-2">No settlement transfers needed (all profits retained by recipients)</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {transfers.length > 0 && (
+                        <div className="bg-white rounded-lg p-4 mb-4">
+                          <h4 className="font-semibold text-gray-800 mb-3">Step 2: Return Tier Matching Funds</h4>
+                          <p className="text-sm text-gray-600 mb-3">Return borrowed funds used for tier matching:</p>
+                          <div className="space-y-2">
+                            {transfers.map(t => {
+                              const from = participants.find(p => p.id === t.from);
+                              const to = participants.find(p => p.id === t.to);
+                              return (
+                                <div key={t.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                                  <div className="flex-1">
+                                    <span className="font-bold text-red-700">{to?.name}</span>
+                                    <span className="mx-2 text-gray-600">returns to</span>
+                                    <span className="font-bold text-green-700">{from?.name}</span>
+                                  </div>
+                                  <div className="font-bold text-lg text-gray-600">
+                                    RM {Number(t.amount).toFixed(2)}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="bg-green-50 rounded-lg p-4">
+                        <h4 className="font-semibold text-green-900 mb-2">Final Summary - What Each Person Keeps:</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          {distribution.map(p => (
+                            <div key={p.id} className="flex justify-between items-center p-2 bg-white rounded">
+                              <span className="font-medium text-gray-800">{p.name}</span>
+                              <span className={`font-bold ${p.netPosition >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                RM {p.netPosition.toFixed(2)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* How This Works - Moved to bottom */}
+                    <div className="mt-6 p-4 bg-blue-50 rounded-lg">
+                      <h3 className="font-semibold text-blue-900 mb-2">
+                        📊 How This Works:
+                      </h3>
+                      <p className="text-blue-800 text-sm mb-2">
+                        • <strong>Capital Share:</strong> Your percentage of total
+                        pool capital
+                      </p>
+                      <p className="text-blue-800 text-sm mb-2">
+                        • <strong>Profit Share:</strong> Your share of total
+                        profit/loss based on capital contribution
+                      </p>
+                      <p className="text-blue-800 text-sm mb-2">
+                        • <strong>Final Amount:</strong> Your initial capital + profit
+                        share
+                      </p>
+                      <p className="text-blue-800 text-sm mb-2">
+                        • <strong>Profit on Capital ROI:</strong> Profit percentage based on total capital contributed to the pool
+                      </p>
+                      <p className="text-blue-800 text-sm">
+                        • <strong>Normal ROI:</strong> Profit percentage based on capital used for IPO application (only for those who applied)
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
-
-export default IPOPoolManager;
