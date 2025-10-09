@@ -33,6 +33,7 @@ function IPOPoolManager() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [publicProjects, setPublicProjects] = useState([]);
   const [isLoadingPublic, setIsLoadingPublic] = useState(false);
+  const [savedNames, setSavedNames] = useState([]);
 
   // Supabase cloud storage - now enabled!
   const CLOUD_ENABLED = true;
@@ -62,7 +63,11 @@ function IPOPoolManager() {
     if (savedParticipants) setParticipants(JSON.parse(savedParticipants));
     if (savedTransfers) setTransfers(JSON.parse(savedTransfers));
     if (savedProjectsData) setSavedProjects(JSON.parse(savedProjectsData));
-
+    
+    // Load saved names
+    const savedNamesData = localStorage.getItem("savedNames");
+    if (savedNamesData) setSavedNames(JSON.parse(savedNamesData));
+    
     // Load public projects
     loadPublicProjects();
   }, []);
@@ -286,7 +291,7 @@ function IPOPoolManager() {
       gotAllocation: false,
       lotsAllocated: 0,
       sellingPrice: 0,
-      sellingFee: 0,
+      sellingFee: 0, // Now in RM, not percentage
     };
     setParticipants([...participants, newParticipant]);
   };
@@ -301,7 +306,14 @@ function IPOPoolManager() {
       participants.map((p) => {
         if (p.id === id) {
           const updated = { ...p, [field]: value };
-
+          
+          // Save name to saved names list if it's a new name
+          if (field === "name" && value && !savedNames.includes(value)) {
+            const newSavedNames = [...savedNames, value];
+            setSavedNames(newSavedNames);
+            localStorage.setItem("savedNames", JSON.stringify(newSavedNames));
+          }
+          
           // If "Will Apply" is unchecked, reset lots applied and allocation data
           if (field === "willApply" && !value) {
             updated.lotsApplied = 0;
@@ -310,14 +322,14 @@ function IPOPoolManager() {
             updated.sellingPrice = 0;
             updated.sellingFee = 0;
           }
-
+          
           // If "Got Allocation" is unchecked, reset allocation data
           if (field === "gotAllocation" && !value) {
             updated.lotsAllocated = 0;
             updated.sellingPrice = 0;
             updated.sellingFee = 0;
           }
-
+          
           return updated;
         }
         return p;
@@ -453,8 +465,7 @@ function IPOPoolManager() {
       Number(participant.lotsAllocated) *
       lotSize *
       Number(participant.sellingPrice || 0);
-    const sellingFeeAmount =
-      sellingAmount * (Number(participant.sellingFee || 0) / 100);
+    const sellingFeeAmount = Number(participant.sellingFee || 0); // Now in RM, not percentage
     const netSellingAmount = sellingAmount - sellingFeeAmount;
     const netProfit = netSellingAmount - allocatedAmount;
 
@@ -658,9 +669,9 @@ function IPOPoolManager() {
                     <th className="border px-3 py-2 text-right font-semibold">
                       Selling Price (per share)
                     </th>
-                    <th className="border px-3 py-2 text-right font-semibold">
-                      Selling Fee (%)
-                    </th>
+            <th className="border px-3 py-2 text-right font-semibold">
+              Selling Fee (RM)
+            </th>
                     <th className="border px-3 py-2 text-right font-semibold">
                       Net Profit/Loss
                     </th>
@@ -681,8 +692,15 @@ function IPOPoolManager() {
                             onChange={(e) =>
                               updateParticipant(p.id, "name", e.target.value)
                             }
-                            className="w-full px-2 py-1 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            list={`names-${p.id}`}
+                            className="w-32 px-2 py-1 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            placeholder="Enter name"
                           />
+                          <datalist id={`names-${p.id}`}>
+                            {savedNames.map((name, index) => (
+                              <option key={index} value={name} />
+                            ))}
+                          </datalist>
                         </td>
                         <td className="border px-3 py-2">
                           <input
@@ -804,7 +822,8 @@ function IPOPoolManager() {
                               )
                             }
                             disabled={!p.gotAllocation}
-                            className="w-20 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
+                            placeholder="0.00"
+                            className="w-24 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
                           />
                         </td>
                         <td className="border px-3 py-2 text-right">
@@ -943,6 +962,25 @@ function IPOPoolManager() {
 
         {activeTab === "results" && (
           <div className="space-y-6">
+            {/* Save to Cloud Button */}
+            <div className="flex justify-end">
+              <button
+                onClick={() => {
+                  const projectName = ipoDetails.companyName || "IPO Project";
+                  saveToPublic(projectName);
+                }}
+                disabled={isLoadingPublic}
+                className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {isLoadingPublic ? (
+                  <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
+                ) : (
+                  <Cloud className="h-4 w-4" />
+                )}
+                <span>Save to Cloud</span>
+              </button>
+            </div>
+
             {/* Summary */}
             <div className="bg-white rounded-lg shadow p-6">
               <h2 className="text-xl font-semibold mb-4">Pool Summary</h2>
@@ -1192,21 +1230,6 @@ function IPOPoolManager() {
                 >
                   <Save className="h-4 w-4" />
                   <span>Save Current</span>
-                </button>
-                <button
-                  onClick={() => {
-                    const projectName = prompt("Enter project name:");
-                    if (projectName) saveToPublic(projectName);
-                  }}
-                  disabled={isLoadingPublic}
-                  className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                >
-                  {isLoadingPublic ? (
-                    <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
-                  ) : (
-                    <Users className="h-4 w-4" />
-                  )}
-                  <span>Save to Cloud</span>
                 </button>
                 <button
                   onClick={exportData}
