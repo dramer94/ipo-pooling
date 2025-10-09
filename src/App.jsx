@@ -12,6 +12,7 @@ import {
   Cloud,
   CloudOff,
 } from "lucide-react";
+import { supabase, IPO_PROJECTS_TABLE } from "./supabase";
 
 function IPOPoolManager() {
   // State management
@@ -33,12 +34,8 @@ function IPOPoolManager() {
   const [publicProjects, setPublicProjects] = useState([]);
   const [isLoadingPublic, setIsLoadingPublic] = useState(false);
 
-  // Cloud storage configuration
+  // Supabase cloud storage - now enabled!
   const CLOUD_ENABLED = true;
-  
-  // Using a simple approach: we'll create a public JSON file that gets updated
-  // For now, we'll use localStorage but add a note about cloud storage
-  const CLOUD_STORAGE_URL = "https://raw.githubusercontent.com/your-username/ipo-pool-data/main/data.json";
 
   // Check online status
   useEffect(() => {
@@ -92,7 +89,7 @@ function IPOPoolManager() {
     setIsLoadingPublic(true);
     try {
       const projectId = Date.now().toString();
-      
+
       // Save project data
       const projectToSave = {
         id: projectId,
@@ -106,23 +103,19 @@ function IPOPoolManager() {
       };
 
       if (CLOUD_ENABLED && isOnline) {
-        // Save to cloud storage
-        const existingProjects = await loadPublicProjectsFromCloud();
-        const updatedProjects = [
-          ...existingProjects.filter((p) => p.id !== projectId),
-          projectToSave,
-        ];
+        // Save to Supabase cloud storage
+        const savedProject = await savePublicProjectsToCloud(projectToSave);
         
-        await savePublicProjectsToCloud(updatedProjects);
-        setPublicProjects(updatedProjects);
+        // Reload all projects from cloud
+        await loadPublicProjects();
         alert("✅ Project saved to cloud! Anyone can now see and edit it.");
       } else {
         // Fallback to localStorage
         const publicKey = `ipo_public_${projectId}`;
         const projectsKey = `ipo_public_projects`;
-        
+
         localStorage.setItem(publicKey, JSON.stringify(projectToSave));
-        
+
         const existingProjects = JSON.parse(
           localStorage.getItem(projectsKey) || "[]"
         );
@@ -141,47 +134,43 @@ function IPOPoolManager() {
     }
   };
 
-  // Cloud storage functions
-  const savePublicProjectsToCloud = async (projects) => {
+  // Supabase cloud storage functions
+  const savePublicProjectsToCloud = async (projectData) => {
     if (!CLOUD_ENABLED || !isOnline) return;
-    
+
     try {
-      const response = await fetch(`${JSONBIN_API_URL}/${BIN_ID}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Master-Key': '$2a$10$8K1p/a0dL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL', // Free public key
-        },
-        body: JSON.stringify(projects),
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to save to cloud');
+      const { data, error } = await supabase
+        .from(IPO_PROJECTS_TABLE)
+        .insert([projectData])
+        .select();
+
+      if (error) {
+        throw error;
       }
+
+      return data[0];
     } catch (error) {
-      console.error('Cloud save failed:', error);
+      console.error("Supabase save failed:", error);
       throw error;
     }
   };
 
   const loadPublicProjectsFromCloud = async () => {
     if (!CLOUD_ENABLED || !isOnline) return [];
-    
+
     try {
-      const response = await fetch(`${JSONBIN_API_URL}/${BIN_ID}/latest`, {
-        headers: {
-          'X-Master-Key': '$2a$10$8K1p/a0dL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL1pL', // Free public key
-        },
-      });
-      
-      if (!response.ok) {
-        return []; // Return empty array if no data exists yet
+      const { data, error } = await supabase
+        .from(IPO_PROJECTS_TABLE)
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        throw error;
       }
-      
-      const data = await response.json();
-      return data.record || [];
+
+      return data || [];
     } catch (error) {
-      console.error('Cloud load failed:', error);
+      console.error("Supabase load failed:", error);
       return [];
     }
   };
@@ -206,44 +195,80 @@ function IPOPoolManager() {
     }
   };
 
-  const loadFromPublic = (projectId) => {
+  const loadFromPublic = async (projectId) => {
     try {
-      const publicKey = getPublicKey(projectId);
-      const projectData = JSON.parse(localStorage.getItem(publicKey));
+      if (CLOUD_ENABLED && isOnline) {
+        // Load from Supabase
+        const { data, error } = await supabase
+          .from(IPO_PROJECTS_TABLE)
+          .select('*')
+          .eq('id', projectId)
+          .single();
 
-      if (projectData) {
-        const { data } = projectData;
-        setIpoDetails(data.ipoDetails || {});
-        setParticipants(data.participants || []);
-        setTransfers(data.transfers || []);
-        alert("✅ Project loaded successfully!");
+        if (error) {
+          throw error;
+        }
+
+        if (data) {
+          setIpoDetails(data.ipo_details || {});
+          setParticipants(data.participants || []);
+          setTransfers(data.transfers || []);
+          alert("✅ Project loaded from cloud successfully!");
+        }
+      } else {
+        // Fallback to localStorage
+        const publicKey = `ipo_public_${projectId}`;
+        const projectData = JSON.parse(localStorage.getItem(publicKey));
+
+        if (projectData) {
+          const { data } = projectData;
+          setIpoDetails(data.ipoDetails || {});
+          setParticipants(data.participants || []);
+          setTransfers(data.transfers || []);
+          alert("✅ Project loaded locally!");
+        }
       }
     } catch (error) {
       alert("❌ Failed to load project: " + error.message);
     }
   };
 
-  const deleteFromPublic = (projectId) => {
+  const deleteFromPublic = async (projectId) => {
     if (
       confirm(
         "Are you sure you want to delete this project? This will remove it for everyone."
       )
     ) {
       try {
-        const publicKey = getPublicKey(projectId);
-        const projectsKey = getPublicProjectsKey();
+        if (CLOUD_ENABLED && isOnline) {
+          // Delete from Supabase
+          const { error } = await supabase
+            .from(IPO_PROJECTS_TABLE)
+            .delete()
+            .eq('id', projectId);
 
-        // Remove project data
-        localStorage.removeItem(publicKey);
+          if (error) {
+            throw error;
+          }
 
-        // Update projects list
-        const updatedProjects = publicProjects.filter(
-          (p) => p.id !== projectId
-        );
-        localStorage.setItem(projectsKey, JSON.stringify(updatedProjects));
-        setPublicProjects(updatedProjects);
+          // Reload projects from cloud
+          await loadPublicProjects();
+          alert("✅ Project deleted from cloud successfully!");
+        } else {
+          // Fallback to localStorage
+          const publicKey = `ipo_public_${projectId}`;
+          const projectsKey = `ipo_public_projects`;
 
-        alert("✅ Project deleted successfully!");
+          localStorage.removeItem(publicKey);
+
+          const updatedProjects = publicProjects.filter(
+            (p) => p.id !== projectId
+          );
+          localStorage.setItem(projectsKey, JSON.stringify(updatedProjects));
+          setPublicProjects(updatedProjects);
+
+          alert("✅ Project deleted locally!");
+        }
       } catch (error) {
         alert("❌ Failed to delete project: " + error.message);
       }
@@ -512,10 +537,10 @@ function IPOPoolManager() {
                 </span>
               </div>
 
-              <div className="flex items-center space-x-2 px-3 py-1 bg-yellow-100 rounded">
-                <Users className="h-4 w-4 text-yellow-600" />
-                <span className="text-sm text-yellow-700 font-medium">
-                  Local Storage Only
+              <div className="flex items-center space-x-2 px-3 py-1 bg-green-100 rounded">
+                <Cloud className="h-4 w-4 text-green-600" />
+                <span className="text-sm text-green-700 font-medium">
+                  Cloud Storage Enabled
                 </span>
               </div>
             </div>
@@ -1181,7 +1206,7 @@ function IPOPoolManager() {
                   ) : (
                     <Users className="h-4 w-4" />
                   )}
-                  <span>Save Locally</span>
+                  <span>Save to Cloud</span>
                 </button>
                 <button
                   onClick={exportData}
@@ -1244,27 +1269,29 @@ function IPOPoolManager() {
             </div>
 
             {/* Storage Information */}
-            <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-              <h3 className="font-semibold text-yellow-800 mb-2">📁 Current Data Storage</h3>
-              <p className="text-yellow-700 text-sm mb-2">
-                <strong>Currently using:</strong> Browser localStorage (data stays on your device only)
+            <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+              <h3 className="font-semibold text-green-800 mb-2">
+                ☁️ Cloud Storage Active
+              </h3>
+              <p className="text-green-700 text-sm mb-2">
+                <strong>Using:</strong> Supabase cloud database (shared with everyone!)
               </p>
-              <p className="text-yellow-700 text-sm mb-2">
-                <strong>For true sharing:</strong> Need to set up cloud storage (Supabase, Firebase, or GitHub)
+              <p className="text-green-700 text-sm mb-2">
+                <strong>Features:</strong> Real-time sharing, cross-device access, persistent storage
               </p>
-              <p className="text-yellow-700 text-sm">
-                <strong>To enable real cloud sharing:</strong> Contact developer to set up cloud database
+              <p className="text-green-700 text-sm">
+                <strong>Status:</strong> Anyone can save and load projects from anywhere
               </p>
             </div>
 
             {/* Public Projects */}
             <div>
               <h3 className="text-lg font-medium mb-4">
-                🌐 Public Projects (Local Storage Only)
+                🌐 Public Projects (Cloud Storage)
               </h3>
               {publicProjects.length === 0 ? (
                 <p className="text-gray-500 italic">
-                  No public projects saved yet. Projects are saved locally on your device.
+                  No public projects saved yet. Projects are saved to the cloud and shared with everyone!
                 </p>
               ) : (
                 <div className="space-y-2">
