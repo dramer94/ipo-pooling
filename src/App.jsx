@@ -1012,140 +1012,166 @@ function IPOPoolManager() {
 
             {/* Distribution */}
             <div className="bg-white rounded-lg shadow p-6">
-              <h2 className="text-xl font-semibold mb-4">Final Distribution</h2>
+              <h2 className="text-xl font-semibold mb-4">IPO Distribution Table</h2>
               <div className="overflow-x-auto">
                 <table className="min-w-full border border-gray-300">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="border px-3 py-2 text-left font-semibold">
-                        Participant
-                      </th>
-                      <th className="border px-3 py-2 text-right font-semibold">
-                        Initial Capital
-                      </th>
-                      <th className="border px-3 py-2 text-right font-semibold">
-                        Capital Share (%)
-                      </th>
-                      <th className="border px-3 py-2 text-right font-semibold">
-                        Profit Share
-                      </th>
-                      <th className="border px-3 py-2 text-right font-semibold">
-                        Final Amount
-                      </th>
-                      <th className="border px-3 py-2 text-right font-semibold">
-                        Profit on Capital ROI
-                      </th>
-                      <th className="border px-3 py-2 text-right font-semibold">
-                        Normal ROI
-                      </th>
+                      <th className="border px-3 py-2 text-left font-semibold">Name</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Capital</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Capital %</th>
+                      <th className="border px-3 py-2 text-center font-semibold">Status</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Selling Price</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Selling Fee</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Actual Profit Received</th>
+                      <th className="border px-3 py-2 text-left font-semibold">Formula Breakdown</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Your Profit Share</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Settlement Transfer Out</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Settlement Transfer In</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Tier Matching Return</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Final Amount</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Profit on Capital ROI</th>
+                      <th className="border px-3 py-2 text-right font-semibold">Normal ROI</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {distribution.map((p) => (
-                      <tr key={p.id}>
-                        <td className="border px-3 py-2 font-medium">
-                          {p.name || `Participant ${p.id}`}
-                        </td>
-                        <td className="border px-3 py-2 text-right">
-                          RM {Number(p.initialCapital || 0).toFixed(2)}
-                        </td>
-                        <td className="border px-3 py-2 text-right">
-                          {(p.capitalShare * 100).toFixed(2)}%
-                        </td>
-                        <td className="border px-3 py-2 text-right">
-                          <span
-                            className={
-                              p.profitShare >= 0
-                                ? "text-green-600"
-                                : "text-red-600"
-                            }
-                          >
-                            RM {p.profitShare.toFixed(2)}
-                          </span>
-                        </td>
-                        <td className="border px-3 py-2 text-right font-bold text-base">
-                          <span
-                            className={
-                              p.netPosition >= 0
-                                ? "text-green-600"
-                                : "text-red-600"
-                            }
-                          >
-                            RM {p.netPosition.toFixed(2)}
-                          </span>
-                        </td>
-                        <td className="border px-3 py-2 text-right font-medium">
-                          {p.capitalUsedToApply > 0 ? (
-                            <span
-                              className={
-                                p.profitShare >= 0
-                                  ? "text-green-600"
-                                  : "text-red-600"
-                              }
-                            >
-                              {(
-                                (p.profitShare / p.capitalUsedToApply) *
-                                100
-                              ).toFixed(2)}
-                              %
+                    {distribution.map((p) => {
+                      const details = calculateParticipantDetails(p);
+                      const status = p.gotAllocation ? `Got ${p.lotsAllocated} lots ✓` : "Applied";
+                      const statusBg = p.gotAllocation ? "bg-green-100" : "bg-yellow-100";
+                      
+                      return (
+                        <tr key={p.id}>
+                          <td className="border px-3 py-2 font-medium">
+                            {p.name || `Participant ${p.id}`}
+                          </td>
+                          <td className="border px-3 py-2 text-right">
+                            RM {Number(p.initialCapital || 0).toFixed(2)}
+                          </td>
+                          <td className="border px-3 py-2 text-right">
+                            {(p.capitalShare * 100).toFixed(2)}%
+                          </td>
+                          <td className={`border px-3 py-2 text-center ${statusBg} rounded`}>
+                            {status}
+                          </td>
+                          <td className="border px-3 py-2 text-right">
+                            {p.gotAllocation ? `RM ${Number(p.sellingPrice || 0).toFixed(2)}` : "-"}
+                          </td>
+                          <td className="border px-3 py-2 text-right">
+                            {p.gotAllocation ? (
+                              <span className="text-red-600">
+                                -RM {Number(p.sellingFee || 0).toFixed(2)}
+                              </span>
+                            ) : "-"}
+                          </td>
+                          <td className="border px-3 py-2 text-right">
+                            {p.gotAllocation ? `RM ${details.netSellingAmount.toFixed(2)}` : "-"}
+                          </td>
+                          <td className="border px-3 py-2 text-left text-sm">
+                            {`(${(p.capitalShare * 100).toFixed(1)}% x RM ${totalProfitLoss.toFixed(2)}) = RM ${p.profitShare.toFixed(2)}`}
+                          </td>
+                          <td className="border px-3 py-2 text-right">
+                            <span className="text-green-600">
+                              RM {p.profitShare.toFixed(2)}
                             </span>
-                          ) : (
-                            "-"
-                          )}
-                        </td>
-                        <td className="border px-3 py-2 text-right font-medium">
-                          {p.allocatedAmount > 0 ? (
-                            <span
-                              className={
-                                p.netProfit >= 0
-                                  ? "text-green-600"
-                                  : "text-red-600"
-                              }
-                            >
-                              {(
-                                (p.netProfit / p.allocatedAmount) *
-                                100
-                              ).toFixed(2)}
-                              %
+                          </td>
+                          <td className="border px-3 py-2 text-right">
+                            {p.gotAllocation ? (
+                              <span className="text-red-600">
+                                -RM {(details.netSellingAmount - p.profitShare).toFixed(2)}
+                              </span>
+                            ) : "-"}
+                          </td>
+                          <td className="border px-3 py-2 text-right">
+                            {!p.gotAllocation ? (
+                              <span className="text-green-600">
+                                +RM {p.profitShare.toFixed(2)}
+                              </span>
+                            ) : "-"}
+                          </td>
+                          <td className="border px-3 py-2 text-right">-</td>
+                          <td className="border px-3 py-2 text-right font-bold">
+                            <span className="text-green-600">
+                              RM {p.netPosition.toFixed(2)}
                             </span>
-                          ) : (
-                            "-"
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="border px-3 py-2 text-right font-medium">
+                            {p.capitalUsedToApply > 0 ? (
+                              <span
+                                className={
+                                  p.profitShare >= 0
+                                    ? "text-green-600"
+                                    : "text-red-600"
+                                }
+                              >
+                                {(
+                                  (p.profitShare / p.capitalUsedToApply) *
+                                  100
+                                ).toFixed(2)}
+                                %
+                              </span>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
+                          <td className="border px-3 py-2 text-right font-medium">
+                            {p.allocatedAmount > 0 ? (
+                              <span
+                                className={
+                                  p.netProfit >= 0
+                                    ? "text-green-600"
+                                    : "text-red-600"
+                                }
+                              >
+                                {(
+                                  (p.netProfit / p.allocatedAmount) *
+                                  100
+                                ).toFixed(2)}
+                                %
+                              </span>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                   <tfoot className="bg-gray-50">
                     <tr>
-                      <td className="border px-3 py-2 font-bold text-base">
-                        TOTAL
-                      </td>
+                      <td className="border px-3 py-2 font-bold text-base">TOTAL</td>
                       <td className="border px-3 py-2 text-right text-base">
                         RM {totalCapital.toFixed(2)}
                       </td>
+                      <td className="border px-3 py-2 text-right text-base">100%</td>
+                      <td className="border px-3 py-2 text-center text-base"></td>
+                      <td className="border px-3 py-2 text-right text-base"></td>
                       <td className="border px-3 py-2 text-right text-base">
-                        100.00%
-                      </td>
-                      <td className="border px-3 py-2 text-right text-base">
-                        <span
-                          className={
-                            totalProfitLoss >= 0
-                              ? "text-green-600"
-                              : "text-red-600"
-                          }
-                        >
-                          RM {totalProfitLoss.toFixed(2)}
+                        <span className="text-red-600">
+                          -RM {distribution.reduce((sum, p) => {
+                            const details = calculateParticipantDetails(p);
+                            return sum + Number(p.sellingFee || 0);
+                          }, 0).toFixed(2)}
                         </span>
                       </td>
                       <td className="border px-3 py-2 text-right text-base">
-                        <span
-                          className={
-                            totalProfitLoss >= 0
-                              ? "text-green-600"
-                              : "text-red-600"
-                          }
-                        >
-                          RM {(totalCapital + totalProfitLoss).toFixed(2)}
+                        RM {distribution.reduce((sum, p) => {
+                          const details = calculateParticipantDetails(p);
+                          return sum + details.netSellingAmount;
+                        }, 0).toFixed(2)}
+                      </td>
+                      <td className="border px-3 py-2 text-left text-base"></td>
+                      <td className="border px-3 py-2 text-right text-base">
+                        <span className="text-green-600">
+                          RM {totalProfitLoss.toFixed(2)}
+                        </span>
+                      </td>
+                      <td className="border px-3 py-2 text-right text-base"></td>
+                      <td className="border px-3 py-2 text-right text-base"></td>
+                      <td className="border px-3 py-2 text-right text-base"></td>
+                      <td className="border px-3 py-2 text-right text-base">
+                        <span className="text-green-600">
+                          RM {totalProfitLoss.toFixed(2)}
                         </span>
                       </td>
                       <td className="border px-3 py-2 text-right text-base">
@@ -1208,10 +1234,12 @@ function IPOPoolManager() {
                   share
                 </p>
                 <p className="text-blue-800 text-sm mb-2">
-                  • <strong>Profit on Capital ROI:</strong> Profit percentage based on total capital used for IPO application
+                  • <strong>Profit on Capital ROI:</strong> Profit percentage
+                  based on total capital used for IPO application
                 </p>
                 <p className="text-blue-800 text-sm">
-                  • <strong>Normal ROI:</strong> Profit percentage based on allocated capital (only for those who got shares)
+                  • <strong>Normal ROI:</strong> Profit percentage based on
+                  allocated capital (only for those who got shares)
                 </p>
               </div>
             </div>
