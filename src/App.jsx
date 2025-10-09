@@ -93,23 +93,21 @@ export default function IPOPoolManager() {
 
     try {
       const projectData = {
-        id: currentProjectId || Date.now(),
+        id: currentProjectId || crypto.randomUUID(),
         savedDate: new Date().toISOString(),
         ipoDetails,
         participants,
         transfers,
       };
 
-      // Save to cloud
-      const { error } = await supabase.from(IPO_PROJECTS_TABLE).upsert({
-        id: projectData.id,
-        project_name: projectName,
-        ipo_details: projectData.ipoDetails,
-        participants: projectData.participants,
-        transfers: projectData.transfers,
-        saved_date: projectData.savedDate,
-        updated_at: new Date().toISOString(),
-      });
+        // Save to cloud
+        const { error } = await supabase.from(IPO_PROJECTS_TABLE).upsert({
+          id: projectData.id,
+          name: projectName,
+          ipo_details: projectData.ipoDetails,
+          participants: projectData.participants,
+          transfers: projectData.transfers,
+        });
 
       if (error) throw error;
 
@@ -130,14 +128,14 @@ export default function IPOPoolManager() {
       console.error("Error saving to cloud:", error);
       alert("Failed to save to cloud. Saving locally instead.");
 
-      // Fallback to local save
-      const projectData = {
-        id: currentProjectId || Date.now(),
-        savedDate: new Date().toISOString(),
-        ipoDetails,
-        participants,
-        transfers,
-      };
+        // Fallback to local save
+        const projectData = {
+          id: currentProjectId || crypto.randomUUID(),
+          savedDate: new Date().toISOString(),
+          ipoDetails,
+          participants,
+          transfers,
+        };
 
       if (currentProjectId) {
         setSavedProjects(
@@ -201,14 +199,13 @@ export default function IPOPoolManager() {
       setIsLoading(true);
       const { data, error } = await supabase
         .from(IPO_PROJECTS_TABLE)
-        .select("*")
-        .order("updated_at", { ascending: false });
+        .select("*");
 
       if (error) throw error;
 
       const cloudProjects = data.map((row) => ({
         id: row.id,
-        savedDate: row.saved_date,
+        savedDate: new Date().toISOString(), // Use current time since no timestamp column
         ipoDetails: row.ipo_details,
         participants: row.participants,
         transfers: row.transfers,
@@ -379,13 +376,15 @@ export default function IPOPoolManager() {
     const whoGotAllocation = participants.filter((p) => p.gotAllocation);
     const whoApplied = participants.filter((p) => p.willApply);
     const onlyCapitalProviders = participants.filter((p) => !p.willApply);
-    
+
     // Get unique actual applicants (those who will actually apply)
-    const actualApplicants = [...new Set(
-      participants
-        .filter((p) => p.willApply && p.actualApplicantName.trim())
-        .map((p) => p.actualApplicantName.trim())
-    )];
+    const actualApplicants = [
+      ...new Set(
+        participants
+          .filter((p) => p.willApply && p.actualApplicantName.trim())
+          .map((p) => p.actualApplicantName.trim())
+      ),
+    ];
 
     let distribution = participants.map((p) => {
       const details = calculateParticipantDetails(p);
@@ -423,12 +422,19 @@ export default function IPOPoolManager() {
         // Use actual applicants for bonus calculation
         const applierBonus = totalProfit * 0.3;
         const capitalPool = totalProfit * 0.7;
-        const bonusPerApplier = actualApplicants.length > 0 ? applierBonus / actualApplicants.length : 0;
+        const bonusPerApplier =
+          actualApplicants.length > 0
+            ? applierBonus / actualApplicants.length
+            : 0;
 
         distribution = distribution.map((p) => {
           let share = (Number(p.initialCapital) / totalCapital) * capitalPool;
           // Give bonus to actual applicant
-          if (p.willApply && p.actualApplicantName.trim() && actualApplicants.includes(p.actualApplicantName.trim())) {
+          if (
+            p.willApply &&
+            p.actualApplicantName.trim() &&
+            actualApplicants.includes(p.actualApplicantName.trim())
+          ) {
             share += bonusPerApplier;
           }
           return { ...p, profitShare: share };
@@ -1043,13 +1049,17 @@ export default function IPOPoolManager() {
                         1. Enter name and initial capital for all participants
                       </p>
                       <p>
-                        2. By default, all participants "Will Apply" - check this box
+                        2. By default, all participants "Will Apply" - check
+                        this box
                       </p>
                       <p>
-                        3. If participant won't apply, uncheck "Will Apply" and enter the actual applicant's name in "Actual Applicant" field
+                        3. If participant won't apply, uncheck "Will Apply" and
+                        enter the actual applicant's name in "Actual Applicant"
+                        field
                       </p>
                       <p>
-                        4. Enter lots applied manually OR click "Max" button to use all available capital
+                        4. Enter lots applied manually OR click "Max" button to
+                        use all available capital
                       </p>
                       <p>
                         5. After allocation results: Check "Got Allocation" and
@@ -1183,7 +1193,9 @@ export default function IPOPoolManager() {
                                   )
                                 }
                                 disabled={!p.willApply}
-                                placeholder={p.willApply ? "Enter applicant name" : "N/A"}
+                                placeholder={
+                                  p.willApply ? "Enter applicant name" : "N/A"
+                                }
                                 className="w-32 px-2 py-1 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
                               />
                             </td>
