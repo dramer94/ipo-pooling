@@ -13,7 +13,8 @@
   "dependencies": {
     "lucide-react": "^0.263.1",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "firebase": "^10.7.1"
   },
   "devDependencies": {
     "@types/react": "^18.2.15",
@@ -26,7 +27,8 @@
     "pooling",
     "investment",
     "profit-sharing",
-    "react"
+    "react",
+    "cloud-storage"
   ],
   "author": "",
   "license": "MIT"
