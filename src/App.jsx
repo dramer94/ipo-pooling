@@ -63,11 +63,11 @@ function IPOPoolManager() {
     if (savedParticipants) setParticipants(JSON.parse(savedParticipants));
     if (savedTransfers) setTransfers(JSON.parse(savedTransfers));
     if (savedProjectsData) setSavedProjects(JSON.parse(savedProjectsData));
-    
+
     // Load saved names
     const savedNamesData = localStorage.getItem("savedNames");
     if (savedNamesData) setSavedNames(JSON.parse(savedNamesData));
-    
+
     // Load public projects
     loadPublicProjects();
   }, []);
@@ -306,14 +306,14 @@ function IPOPoolManager() {
       participants.map((p) => {
         if (p.id === id) {
           const updated = { ...p, [field]: value };
-          
+
           // Save name to saved names list if it's a new name
           if (field === "name" && value && !savedNames.includes(value)) {
             const newSavedNames = [...savedNames, value];
             setSavedNames(newSavedNames);
             localStorage.setItem("savedNames", JSON.stringify(newSavedNames));
           }
-          
+
           // If "Will Apply" is unchecked, reset lots applied and allocation data
           if (field === "willApply" && !value) {
             updated.lotsApplied = 0;
@@ -322,14 +322,14 @@ function IPOPoolManager() {
             updated.sellingPrice = 0;
             updated.sellingFee = 0;
           }
-          
+
           // If "Got Allocation" is unchecked, reset allocation data
           if (field === "gotAllocation" && !value) {
             updated.lotsAllocated = 0;
             updated.sellingPrice = 0;
             updated.sellingFee = 0;
           }
-          
+
           return updated;
         }
         return p;
@@ -669,9 +669,9 @@ function IPOPoolManager() {
                     <th className="border px-3 py-2 text-right font-semibold">
                       Selling Price (per share)
                     </th>
-            <th className="border px-3 py-2 text-right font-semibold">
-              Selling Fee (RM)
-            </th>
+                    <th className="border px-3 py-2 text-right font-semibold">
+                      Selling Fee (RM)
+                    </th>
                     <th className="border px-3 py-2 text-right font-semibold">
                       Net Profit/Loss
                     </th>
@@ -1033,10 +1033,10 @@ function IPOPoolManager() {
                         Final Amount
                       </th>
                       <th className="border px-3 py-2 text-right font-semibold">
-                        ROI (vs Initial Capital)
+                        Profit on Capital ROI
                       </th>
                       <th className="border px-3 py-2 text-right font-semibold">
-                        ROI (vs Allocated Capital)
+                        Normal ROI
                       </th>
                     </tr>
                   </thead>
@@ -1075,16 +1075,16 @@ function IPOPoolManager() {
                           </span>
                         </td>
                         <td className="border px-3 py-2 text-right font-medium">
-                          {Number(p.initialCapital) > 0 ? (
+                          {p.capitalUsedToApply > 0 ? (
                             <span
                               className={
-                                p.netPosition >= 0
+                                p.profitShare >= 0
                                   ? "text-green-600"
                                   : "text-red-600"
                               }
                             >
                               {(
-                                (p.netPosition / Number(p.initialCapital)) *
+                                (p.profitShare / p.capitalUsedToApply) *
                                 100
                               ).toFixed(2)}
                               %
@@ -1094,16 +1094,16 @@ function IPOPoolManager() {
                           )}
                         </td>
                         <td className="border px-3 py-2 text-right font-medium">
-                          {p.capitalUsedToApply > 0 ? (
+                          {p.allocatedAmount > 0 ? (
                             <span
                               className={
-                                p.netPosition >= 0
+                                p.netProfit >= 0
                                   ? "text-green-600"
                                   : "text-red-600"
                               }
                             >
                               {(
-                                (p.netPosition / p.capitalUsedToApply) *
+                                (p.netProfit / p.allocatedAmount) *
                                 100
                               ).toFixed(2)}
                               %
@@ -1149,7 +1149,7 @@ function IPOPoolManager() {
                         </span>
                       </td>
                       <td className="border px-3 py-2 text-right text-base">
-                        {totalCapital > 0 ? (
+                        {totalCapitalUsed > 0 ? (
                           <span
                             className={
                               totalProfitLoss >= 0
@@ -1157,9 +1157,10 @@ function IPOPoolManager() {
                                 : "text-red-600"
                             }
                           >
-                            {((totalProfitLoss / totalCapital) * 100).toFixed(
-                              2
-                            )}
+                            {(
+                              (totalProfitLoss / totalCapitalUsed) *
+                              100
+                            ).toFixed(2)}
                             %
                           </span>
                         ) : (
@@ -1207,12 +1208,10 @@ function IPOPoolManager() {
                   share
                 </p>
                 <p className="text-blue-800 text-sm mb-2">
-                  • <strong>ROI (vs Initial Capital):</strong> Return on
-                  investment based on your total capital contribution
+                  • <strong>Profit on Capital ROI:</strong> Profit percentage based on total capital used for IPO application
                 </p>
                 <p className="text-blue-800 text-sm">
-                  • <strong>ROI (vs Allocated Capital):</strong> Return on
-                  investment based on capital actually used for IPO application
+                  • <strong>Normal ROI:</strong> Profit percentage based on allocated capital (only for those who got shares)
                 </p>
               </div>
             </div>
