@@ -13,11 +13,12 @@ import {
   Trash2,
   AlertCircle,
 } from "lucide-react";
+import { supabase, IPO_PROJECTS_TABLE } from "./supabase";
 
 export default function IPOPoolManager() {
   const [savedProjects, setSavedProjects] = useState(() => {
     // Load saved projects from localStorage on component mount
-    const saved = localStorage.getItem('ipo-saved-projects');
+    const saved = localStorage.getItem("ipo-saved-projects");
     return saved ? JSON.parse(saved) : [];
   });
   const [currentProjectId, setCurrentProjectId] = useState(null);
@@ -46,10 +47,17 @@ export default function IPOPoolManager() {
 
   const [transfers, setTransfers] = useState([]);
   const [activeTab, setActiveTab] = useState("ipo");
+  const [isOnline, setIsOnline] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Load projects from cloud on component mount
+  useEffect(() => {
+    loadPublicProjectsFromCloud();
+  }, []);
 
   // Save projects to localStorage whenever savedProjects changes
   useEffect(() => {
-    localStorage.setItem('ipo-saved-projects', JSON.stringify(savedProjects));
+    localStorage.setItem("ipo-saved-projects", JSON.stringify(savedProjects));
   }, [savedProjects]);
 
   const calculateMaxLots = (capital, ipoPrice, lotSize) => {
@@ -72,26 +80,75 @@ export default function IPOPoolManager() {
     }
   };
 
-  const saveCurrentProject = () => {
+  const saveCurrentProject = async () => {
     const projectName = ipoDetails.name || "Untitled IPO";
-    const projectData = {
-      id: currentProjectId || Date.now(),
-      savedDate: new Date().toISOString(),
-      ipoDetails,
-      participants,
-      transfers,
-    };
-
-    if (currentProjectId) {
-      setSavedProjects(
-        savedProjects.map((p) => (p.id === currentProjectId ? projectData : p))
-      );
-    } else {
-      setSavedProjects([...savedProjects, projectData]);
-      setCurrentProjectId(projectData.id);
+    
+    if (!projectName.trim()) {
+      alert("Please enter a project name first!");
+      return;
     }
 
-    alert(`Project "${projectName}" saved successfully!`);
+    setIsLoading(true);
+    
+    try {
+      const projectData = {
+        id: currentProjectId || Date.now(),
+        savedDate: new Date().toISOString(),
+        ipoDetails,
+        participants,
+        transfers,
+      };
+
+      // Save to cloud
+      const { error } = await supabase
+        .from(IPO_PROJECTS_TABLE)
+        .upsert({
+          id: projectData.id,
+          project_name: projectName,
+          ipo_details: projectData.ipoDetails,
+          participants: projectData.participants,
+          transfers: projectData.transfers,
+          saved_date: projectData.savedDate,
+          updated_at: new Date().toISOString()
+        });
+
+      if (error) throw error;
+
+      // Update local state
+      if (currentProjectId) {
+        setSavedProjects(
+          savedProjects.map((p) => (p.id === currentProjectId ? projectData : p))
+        );
+      } else {
+        setSavedProjects([...savedProjects, projectData]);
+        setCurrentProjectId(projectData.id);
+      }
+
+      alert(`Project "${projectName}" saved to cloud successfully!`);
+    } catch (error) {
+      console.error("Error saving to cloud:", error);
+      alert("Failed to save to cloud. Saving locally instead.");
+      
+      // Fallback to local save
+      const projectData = {
+        id: currentProjectId || Date.now(),
+        savedDate: new Date().toISOString(),
+        ipoDetails,
+        participants,
+        transfers,
+      };
+
+      if (currentProjectId) {
+        setSavedProjects(
+          savedProjects.map((p) => (p.id === currentProjectId ? projectData : p))
+        );
+      } else {
+        setSavedProjects([...savedProjects, projectData]);
+        setCurrentProjectId(projectData.id);
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const loadProject = (project) => {
@@ -135,11 +192,64 @@ export default function IPOPoolManager() {
     setActiveTab("ipo");
   };
 
-  const deleteProject = (projectId) => {
+  const loadPublicProjectsFromCloud = async () => {
+    try {
+      setIsLoading(true);
+      const { data, error } = await supabase
+        .from(IPO_PROJECTS_TABLE)
+        .select('*')
+        .order('updated_at', { ascending: false });
+
+      if (error) throw error;
+
+      const cloudProjects = data.map(row => ({
+        id: row.id,
+        savedDate: row.saved_date,
+        ipoDetails: row.ipo_details,
+        participants: row.participants,
+        transfers: row.transfers
+      }));
+
+      setSavedProjects(cloudProjects);
+      setIsOnline(true);
+    } catch (error) {
+      console.error("Error loading from cloud:", error);
+      setIsOnline(false);
+      // Fallback to localStorage
+      const saved = localStorage.getItem("ipo-saved-projects");
+      if (saved) {
+        setSavedProjects(JSON.parse(saved));
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const deleteProject = async (projectId) => {
     if (confirm("Delete this project permanently?")) {
-      setSavedProjects(savedProjects.filter((p) => p.id !== projectId));
-      if (currentProjectId === projectId) {
-        createNewProject();
+      try {
+        // Delete from cloud
+        const { error } = await supabase
+          .from(IPO_PROJECTS_TABLE)
+          .delete()
+          .eq('id', projectId);
+
+        if (error) throw error;
+
+        // Update local state
+        setSavedProjects(savedProjects.filter((p) => p.id !== projectId));
+        if (currentProjectId === projectId) {
+          createNewProject();
+        }
+      } catch (error) {
+        console.error("Error deleting from cloud:", error);
+        alert("Failed to delete from cloud, but deleted locally.");
+        
+        // Fallback to local delete
+        setSavedProjects(savedProjects.filter((p) => p.id !== projectId));
+        if (currentProjectId === projectId) {
+          createNewProject();
+        }
       }
     }
   };
@@ -453,17 +563,18 @@ export default function IPOPoolManager() {
               </button>
               <button
                 onClick={saveCurrentProject}
-                className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
+                disabled={isLoading}
+                className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors disabled:bg-gray-400"
               >
                 <Save className="w-5 h-5" />
-                Save
+                {isLoading ? "Saving..." : "Save to Cloud"}
               </button>
               <button
                 onClick={() => setShowProjectList(!showProjectList)}
                 className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors"
               >
                 <FolderOpen className="w-5 h-5" />
-                Projects ({savedProjects.length})
+                Cloud Projects ({savedProjects.length}) {isOnline ? "🟢" : "🔴"}
               </button>
             </div>
           </div>
@@ -483,10 +594,15 @@ export default function IPOPoolManager() {
 
         {showProjectList && (
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-gray-800">
-                Saved IPO Projects
-              </h2>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800">
+                    Cloud Storage {isOnline ? "🟢 Online" : "🔴 Offline"}
+                  </h2>
+                  <p className="text-sm text-gray-600">
+                    Projects are saved to Supabase cloud database
+                  </p>
+                </div>
               <div className="flex gap-2">
                 <label className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors cursor-pointer">
                   <Upload className="w-5 h-5" />
