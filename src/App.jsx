@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   PlusCircle,
   MinusCircle,
@@ -15,7 +15,11 @@ import {
 } from "lucide-react";
 
 export default function IPOPoolManager() {
-  const [savedProjects, setSavedProjects] = useState([]);
+  const [savedProjects, setSavedProjects] = useState(() => {
+    // Load saved projects from localStorage on component mount
+    const saved = localStorage.getItem('ipo-saved-projects');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [currentProjectId, setCurrentProjectId] = useState(null);
   const [showProjectList, setShowProjectList] = useState(false);
 
@@ -42,6 +46,11 @@ export default function IPOPoolManager() {
 
   const [transfers, setTransfers] = useState([]);
   const [activeTab, setActiveTab] = useState("ipo");
+
+  // Save projects to localStorage whenever savedProjects changes
+  useEffect(() => {
+    localStorage.setItem('ipo-saved-projects', JSON.stringify(savedProjects));
+  }, [savedProjects]);
 
   const calculateMaxLots = (capital, ipoPrice, lotSize) => {
     if (!ipoPrice || !lotSize || !capital) return 0;
