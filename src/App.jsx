@@ -37,6 +37,7 @@ export default function IPOPoolManager() {
       name: "Person A",
       initialCapital: 10000,
       willApply: true,
+      actualApplicantName: "",
       lotsApplied: 0,
       gotAllocation: false,
       lotsAllocated: 0,
@@ -82,14 +83,14 @@ export default function IPOPoolManager() {
 
   const saveCurrentProject = async () => {
     const projectName = ipoDetails.name || "Untitled IPO";
-    
+
     if (!projectName.trim()) {
       alert("Please enter a project name first!");
       return;
     }
 
     setIsLoading(true);
-    
+
     try {
       const projectData = {
         id: currentProjectId || Date.now(),
@@ -100,24 +101,24 @@ export default function IPOPoolManager() {
       };
 
       // Save to cloud
-      const { error } = await supabase
-        .from(IPO_PROJECTS_TABLE)
-        .upsert({
-          id: projectData.id,
-          project_name: projectName,
-          ipo_details: projectData.ipoDetails,
-          participants: projectData.participants,
-          transfers: projectData.transfers,
-          saved_date: projectData.savedDate,
-          updated_at: new Date().toISOString()
-        });
+      const { error } = await supabase.from(IPO_PROJECTS_TABLE).upsert({
+        id: projectData.id,
+        project_name: projectName,
+        ipo_details: projectData.ipoDetails,
+        participants: projectData.participants,
+        transfers: projectData.transfers,
+        saved_date: projectData.savedDate,
+        updated_at: new Date().toISOString(),
+      });
 
       if (error) throw error;
 
       // Update local state
       if (currentProjectId) {
         setSavedProjects(
-          savedProjects.map((p) => (p.id === currentProjectId ? projectData : p))
+          savedProjects.map((p) =>
+            p.id === currentProjectId ? projectData : p
+          )
         );
       } else {
         setSavedProjects([...savedProjects, projectData]);
@@ -128,7 +129,7 @@ export default function IPOPoolManager() {
     } catch (error) {
       console.error("Error saving to cloud:", error);
       alert("Failed to save to cloud. Saving locally instead.");
-      
+
       // Fallback to local save
       const projectData = {
         id: currentProjectId || Date.now(),
@@ -140,7 +141,9 @@ export default function IPOPoolManager() {
 
       if (currentProjectId) {
         setSavedProjects(
-          savedProjects.map((p) => (p.id === currentProjectId ? projectData : p))
+          savedProjects.map((p) =>
+            p.id === currentProjectId ? projectData : p
+          )
         );
       } else {
         setSavedProjects([...savedProjects, projectData]);
@@ -180,6 +183,7 @@ export default function IPOPoolManager() {
         name: "Person A",
         initialCapital: 10000,
         willApply: true,
+        actualApplicantName: "",
         lotsApplied: 0,
         gotAllocation: false,
         lotsAllocated: 0,
@@ -197,17 +201,17 @@ export default function IPOPoolManager() {
       setIsLoading(true);
       const { data, error } = await supabase
         .from(IPO_PROJECTS_TABLE)
-        .select('*')
-        .order('updated_at', { ascending: false });
+        .select("*")
+        .order("updated_at", { ascending: false });
 
       if (error) throw error;
 
-      const cloudProjects = data.map(row => ({
+      const cloudProjects = data.map((row) => ({
         id: row.id,
         savedDate: row.saved_date,
         ipoDetails: row.ipo_details,
         participants: row.participants,
-        transfers: row.transfers
+        transfers: row.transfers,
       }));
 
       setSavedProjects(cloudProjects);
@@ -232,7 +236,7 @@ export default function IPOPoolManager() {
         const { error } = await supabase
           .from(IPO_PROJECTS_TABLE)
           .delete()
-          .eq('id', projectId);
+          .eq("id", projectId);
 
         if (error) throw error;
 
@@ -244,7 +248,7 @@ export default function IPOPoolManager() {
       } catch (error) {
         console.error("Error deleting from cloud:", error);
         alert("Failed to delete from cloud, but deleted locally.");
-        
+
         // Fallback to local delete
         setSavedProjects(savedProjects.filter((p) => p.id !== projectId));
         if (currentProjectId === projectId) {
@@ -293,6 +297,7 @@ export default function IPOPoolManager() {
         name: `Person ${String.fromCharCode(64 + newId)}`,
         initialCapital: 0,
         willApply: true,
+        actualApplicantName: "",
         lotsApplied: 0,
         gotAllocation: false,
         lotsAllocated: 0,
@@ -374,6 +379,13 @@ export default function IPOPoolManager() {
     const whoGotAllocation = participants.filter((p) => p.gotAllocation);
     const whoApplied = participants.filter((p) => p.willApply);
     const onlyCapitalProviders = participants.filter((p) => !p.willApply);
+    
+    // Get unique actual applicants (those who will actually apply)
+    const actualApplicants = [...new Set(
+      participants
+        .filter((p) => p.willApply && p.actualApplicantName.trim())
+        .map((p) => p.actualApplicantName.trim())
+    )];
 
     let distribution = participants.map((p) => {
       const details = calculateParticipantDetails(p);
@@ -408,13 +420,15 @@ export default function IPOPoolManager() {
           return { ...p, profitShare: share };
         });
       } else {
+        // Use actual applicants for bonus calculation
         const applierBonus = totalProfit * 0.3;
         const capitalPool = totalProfit * 0.7;
-        const bonusPerApplier = applierBonus / whoApplied.length;
+        const bonusPerApplier = actualApplicants.length > 0 ? applierBonus / actualApplicants.length : 0;
 
         distribution = distribution.map((p) => {
           let share = (Number(p.initialCapital) / totalCapital) * capitalPool;
-          if (p.willApply) {
+          // Give bonus to actual applicant
+          if (p.willApply && p.actualApplicantName.trim() && actualApplicants.includes(p.actualApplicantName.trim())) {
             share += bonusPerApplier;
           }
           return { ...p, profitShare: share };
@@ -594,15 +608,15 @@ export default function IPOPoolManager() {
 
         {showProjectList && (
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-xl font-bold text-gray-800">
-                    Cloud Storage {isOnline ? "🟢 Online" : "🔴 Offline"}
-                  </h2>
-                  <p className="text-sm text-gray-600">
-                    Projects are saved to Supabase cloud database
-                  </p>
-                </div>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-xl font-bold text-gray-800">
+                  Cloud Storage {isOnline ? "🟢 Online" : "🔴 Offline"}
+                </h2>
+                <p className="text-sm text-gray-600">
+                  Projects are saved to Supabase cloud database
+                </p>
+              </div>
               <div className="flex gap-2">
                 <label className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors cursor-pointer">
                   <Upload className="w-5 h-5" />
@@ -1029,23 +1043,24 @@ export default function IPOPoolManager() {
                         1. Enter name and initial capital for all participants
                       </p>
                       <p>
-                        2. Uncheck "Will Apply" for those who only provide
-                        capital
+                        2. By default, all participants "Will Apply" - check this box
                       </p>
                       <p>
-                        3. Enter lots applied manually OR click "Max" button to
-                        use all available capital
+                        3. If participant won't apply, uncheck "Will Apply" and enter the actual applicant's name in "Actual Applicant" field
                       </p>
                       <p>
-                        4. After allocation results: Check "Got Allocation" and
+                        4. Enter lots applied manually OR click "Max" button to use all available capital
+                      </p>
+                      <p>
+                        5. After allocation results: Check "Got Allocation" and
                         enter lots allocated
                       </p>
                       <p>
-                        5. After selling: Enter each person's selling price and
+                        6. After selling: Enter each person's selling price and
                         selling fee (brokerage charges)
                       </p>
                       <p>
-                        6. Net Profit auto-calculates: Gross Profit - Selling
+                        7. Net Profit auto-calculates: Gross Profit - Selling
                         Fee
                       </p>
                       <p className="mt-2 text-xs bg-blue-100 p-2 rounded">
@@ -1068,6 +1083,9 @@ export default function IPOPoolManager() {
                         </th>
                         <th className="border px-3 py-2 text-center font-semibold">
                           Will Apply?
+                        </th>
+                        <th className="border px-3 py-2 text-left font-semibold">
+                          Actual Applicant
                         </th>
                         <th className="border px-3 py-2 text-right font-semibold">
                           Lots Applied
@@ -1151,6 +1169,22 @@ export default function IPOPoolManager() {
                                   )
                                 }
                                 className="w-5 h-5 text-indigo-600 rounded"
+                              />
+                            </td>
+                            <td className="border px-3 py-2">
+                              <input
+                                type="text"
+                                value={p.actualApplicantName || ""}
+                                onChange={(e) =>
+                                  updateParticipant(
+                                    p.id,
+                                    "actualApplicantName",
+                                    e.target.value
+                                  )
+                                }
+                                disabled={!p.willApply}
+                                placeholder={p.willApply ? "Enter applicant name" : "N/A"}
+                                className="w-32 px-2 py-1 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
                               />
                             </td>
                             <td className="border px-3 py-2">
