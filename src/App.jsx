@@ -58,26 +58,41 @@ export default function IPOPoolManager() {
   const [expandedIpos, setExpandedIpos] = useState({});
   const [ipoSearch, setIpoSearch] = useState("");
 
-  // Simple admin password gate (remembers on this device)
-  const ADMIN_PASSWORD = "admin123";
-  const [authed, setAuthed] = useState(
-    () => localStorage.getItem("ipo-admin-authed") === "true"
-  );
+  // Real admin auth via Supabase (works with Row Level Security). Single
+  // shared account; the login box only asks for the password, email is fixed.
+  const ADMIN_EMAIL = "admin@ifcpo.com.my";
+  const [session, setSession] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [pwInput, setPwInput] = useState("");
-  const [pwError, setPwError] = useState(false);
-  const handleLogin = (e) => {
+  const [pwError, setPwError] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
+  const authed = !!session;
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthChecked(true);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+      if (s) loadPublicProjectsFromCloud();
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  const handleLogin = async (e) => {
     e.preventDefault();
-    if (pwInput === ADMIN_PASSWORD) {
-      localStorage.setItem("ipo-admin-authed", "true");
-      setAuthed(true);
-      setPwError(false);
-    } else {
-      setPwError(true);
-    }
+    setLoggingIn(true);
+    setPwError("");
+    const { error } = await supabase.auth.signInWithPassword({
+      email: ADMIN_EMAIL,
+      password: pwInput,
+    });
+    if (error) setPwError(error.message || "Wrong password — try again.");
+    setLoggingIn(false);
   };
-  const handleLogout = () => {
-    localStorage.removeItem("ipo-admin-authed");
-    setAuthed(false);
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setPwInput("");
   };
 
@@ -1197,7 +1212,16 @@ export default function IPOPoolManager() {
   );
   const canShowDistribution = hasAllocationData && hasSellingPrice;
 
-  // Admin login gate — must enter password before seeing the app
+  // Wait until we've checked for an existing session (avoids flashing login)
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
+        <div className="text-gray-400">Loading…</div>
+      </div>
+    );
+  }
+
+  // Admin login gate — must log in before seeing the app
   if (!authed) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center p-4">
@@ -1220,7 +1244,7 @@ export default function IPOPoolManager() {
             value={pwInput}
             onChange={(e) => {
               setPwInput(e.target.value);
-              setPwError(false);
+              setPwError("");
             }}
             autoFocus
             placeholder="Enter admin password"
@@ -1231,13 +1255,14 @@ export default function IPOPoolManager() {
             }`}
           />
           {pwError && (
-            <p className="text-red-600 text-sm mt-2">Wrong password — try again.</p>
+            <p className="text-red-600 text-sm mt-2">{pwError}</p>
           )}
           <button
             type="submit"
-            className="w-full mt-5 bg-indigo-600 text-white py-2.5 rounded-lg font-semibold hover:bg-indigo-700 transition-colors"
+            disabled={loggingIn}
+            className="w-full mt-5 bg-indigo-600 text-white py-2.5 rounded-lg font-semibold hover:bg-indigo-700 transition-colors disabled:bg-gray-400"
           >
-            Enter
+            {loggingIn ? "Signing in…" : "Enter"}
           </button>
         </form>
       </div>
