@@ -3404,17 +3404,39 @@ You can paste multiple IPOs at once!`}
 
                   const creditorsCopy = creditors.map(c => ({ ...c, remaining: c.settleBalance }));
                   const debtorsCopy = debtors.map(d => ({ ...d, remaining: Math.abs(d.settleBalance) }));
+
+                  // Relationship priority — keep money within close circles first.
+                  const RELATIONSHIPS = [
+                    { pair: ["Zaim", "Deena"], score: 3, label: "💑 spouses" },
+                    { pair: ["Amer", "Sab"], score: 3, label: "💑 spouses" },
+                    { pair: ["Amer", "Fairuz"], score: 2, label: "🤝 close" },
+                    { pair: ["Amer", "Saddiq"], score: 2, label: "🤝 close" },
+                  ];
+                  const relOf = (a, b) =>
+                    RELATIONSHIPS.find(
+                      r => (r.pair[0] === a && r.pair[1] === b) || (r.pair[0] === b && r.pair[1] === a)
+                    ) || null;
+
+                  // Greedily settle the most closely-related payer/receiver pair first,
+                  // tie-broken by the largest amount (fewer transfers). Falls back to
+                  // unrelated pairs only once no related balances remain.
                   const settlements = [];
-                  let i = 0, j = 0;
-                  while (i < creditorsCopy.length && j < debtorsCopy.length) {
-                    const creditor = creditorsCopy[i];
-                    const debtor = debtorsCopy[j];
-                    const amount = Math.min(creditor.remaining, debtor.remaining);
-                    if (amount > 0.01) settlements.push({ from: debtor.name, to: creditor.name, amount });
-                    creditor.remaining -= amount;
-                    debtor.remaining -= amount;
-                    if (creditor.remaining < 0.01) i++;
-                    if (debtor.remaining < 0.01) j++;
+                  while (true) {
+                    const cs = creditorsCopy.filter(c => c.remaining > 0.01);
+                    const ds = debtorsCopy.filter(d => d.remaining > 0.01);
+                    if (!cs.length || !ds.length) break;
+                    let best = null;
+                    for (const c of cs) for (const d of ds) {
+                      const amt = Math.min(c.remaining, d.remaining);
+                      const rel = relOf(c.name, d.name);
+                      const score = rel ? rel.score : 0;
+                      if (!best || score > best.score || (score === best.score && amt > best.amt)) {
+                        best = { c, d, amt, score, label: rel ? rel.label : null };
+                      }
+                    }
+                    settlements.push({ from: best.d.name, to: best.c.name, amount: best.amt, relation: best.label });
+                    best.c.remaining -= best.amt;
+                    best.d.remaining -= best.amt;
                   }
 
                   return (
@@ -3484,6 +3506,11 @@ You can paste multiple IPOs at once!`}
                                 <span className="font-bold text-red-700 text-lg">{s.from}</span>
                                 <span className="text-gray-400 text-sm">pays</span>
                                 <span className="font-bold text-green-700 text-lg">{s.to}</span>
+                                {s.relation && (
+                                  <span className="text-xs font-medium bg-pink-100 text-pink-700 px-2 py-0.5 rounded-full">
+                                    {s.relation}
+                                  </span>
+                                )}
                               </div>
                               <div className="text-2xl font-extrabold text-indigo-700 bg-indigo-50 px-5 py-2 rounded-lg border border-indigo-200">
                                 RM {s.amount.toFixed(2)}
