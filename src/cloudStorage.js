@@ -52,3 +52,6 @@ export const loadFromCloud = async () => {
 export const deleteFromCloud = async (projects) => {
   return await saveToCloud(projects);
 };
+
+
+

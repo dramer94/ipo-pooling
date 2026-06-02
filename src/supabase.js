@@ -10,3 +10,6 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Database table name for IPO projects
 export const IPO_PROJECTS_TABLE = "ipo_projects";
+
+
+

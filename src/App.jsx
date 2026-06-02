@@ -12,8 +12,12 @@ import {
   Upload,
   Trash2,
   AlertCircle,
+  FileInput,
+  X,
+  Check,
 } from "lucide-react";
 import { supabase, IPO_PROJECTS_TABLE } from "./supabase";
+import { parseIPOText, convertToAppFormat } from "./ipoTextParser";
 
 export default function IPOPoolManager() {
   const [savedProjects, setSavedProjects] = useState(() => {
@@ -47,19 +51,130 @@ export default function IPOPoolManager() {
   ]);
 
   const [transfers, setTransfers] = useState([]);
-  const [activeTab, setActiveTab] = useState("ipo");
+  const [activeTab, setActiveTab] = useState("summary");
   const [isOnline, setIsOnline] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+  const [expandedRows, setExpandedRows] = useState({});
 
-  // Load projects from cloud on component mount
+  // Import feature states
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [parsedData, setParsedData] = useState(null);
+  const [parseError, setParseError] = useState("");
+
+  // Load projects from cloud on component mount + subscribe to realtime changes
   useEffect(() => {
     loadPublicProjectsFromCloud();
+
+    const channel = supabase
+      .channel('ipo_projects_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ipo_projects' }, () => {
+        loadPublicProjectsFromCloud();
+      })
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
   }, []);
 
   // Save projects to localStorage whenever savedProjects changes
   useEffect(() => {
     localStorage.setItem("ipo-saved-projects", JSON.stringify(savedProjects));
   }, [savedProjects]);
+
+  // Import functions
+  const handleParseText = () => {
+    try {
+      setParseError("");
+      const result = parseIPOText(importText);
+      const converted = convertToAppFormat(result);
+      setParsedData(converted);
+    } catch (error) {
+      setParseError(error.message);
+      setParsedData(null);
+    }
+  };
+
+  const handleImportIPO = (ipoData) => {
+    // Load the selected IPO data into the current project
+    setIpoDetails(ipoData.ipoDetails);
+    setParticipants(ipoData.participants);
+    setTransfers(ipoData.transfers || []);
+    setCurrentProjectId(null); // New project
+    setShowImportModal(false);
+    setImportText("");
+    setParsedData(null);
+    setActiveTab("participants");
+  };
+
+  const handleImportAllIPOs = async () => {
+    if (!parsedData || parsedData.length === 0) return;
+
+    setIsLoading(true);
+    let successCount = 0;
+
+    try {
+      for (const ipoData of parsedData) {
+        const projectData = {
+          id: crypto.randomUUID(),
+          savedDate: new Date().toISOString(),
+          ipoDetails: ipoData.ipoDetails,
+          participants: ipoData.participants,
+          transfers: ipoData.transfers || [],
+        };
+
+        // Save to cloud
+        const { error } = await supabase.from(IPO_PROJECTS_TABLE).upsert({
+          id: projectData.id,
+          name: ipoData.ipoDetails.name,
+          ipo_details: projectData.ipoDetails,
+          participants: projectData.participants,
+          transfers: projectData.transfers,
+        });
+
+        if (!error) {
+          setSavedProjects((prev) => [...prev, projectData]);
+          successCount++;
+        }
+      }
+
+      setShowImportModal(false);
+      setImportText("");
+      setParsedData(null);
+      alert(`Successfully imported ${successCount} IPO project(s) to cloud!`);
+      setActiveTab("ipo");
+    } catch (error) {
+      console.error("Error bulk importing:", error);
+      alert(`Imported ${successCount} out of ${parsedData.length} projects. Some failed.`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleClearImport = () => {
+    setImportText("");
+    setParsedData(null);
+    setParseError("");
+  };
+
+  // Calculate M+ selling fee
+  const calculateMPlusFee = (sellingAmount) => {
+    if (!sellingAmount || sellingAmount <= 0) return 0;
+
+    // M+ Fee Structure for selling:
+    // 1. Brokerage: 0.1% (minimum RM8)
+    const brokerageFee = Math.max(sellingAmount * 0.001, 8);
+
+    // 2. Clearing fee: 0.03%
+    const clearingFee = sellingAmount * 0.0003;
+
+    // 3. Stamp duty: RM1 per RM1000 or part thereof (minimum RM1)
+    const stampDuty = Math.max(Math.ceil(sellingAmount / 1000), 1);
+
+    // Total fee
+    const totalFee = brokerageFee + clearingFee + stampDuty;
+
+    return parseFloat(totalFee.toFixed(2));
+  };
 
   const calculateMaxLots = (capital, ipoPrice, lotSize) => {
     if (!ipoPrice || !lotSize || !capital) return 0;
@@ -79,6 +194,35 @@ export default function IPOPoolManager() {
       );
       updateParticipant(participantId, "lotsApplied", maxLots);
     }
+  };
+
+  // Auto-calculate selling fee when selling price or lots allocated changes
+  const updateParticipantWithAutoFee = (id, field, value) => {
+    const participant = participants.find((p) => p.id === id);
+    if (!participant) return;
+
+    // Update the field first
+    const updatedParticipant = { ...participant, [field]: value };
+
+    // Auto-calculate selling fee if relevant fields changed
+    if (field === "sellingPrice" || field === "lotsAllocated") {
+      const sellingPrice = Number(
+        field === "sellingPrice" ? value : participant.sellingPrice
+      );
+      const lotsAllocated = Number(
+        field === "lotsAllocated" ? value : participant.lotsAllocated
+      );
+      const lotSize = Number(ipoDetails.lotSize);
+
+      if (sellingPrice > 0 && lotsAllocated > 0 && lotSize > 0) {
+        const sellingAmount = lotsAllocated * lotSize * sellingPrice;
+        updatedParticipant.sellingFee = calculateMPlusFee(sellingAmount);
+      }
+    }
+
+    setParticipants(
+      participants.map((p) => (p.id === id ? updatedParticipant : p))
+    );
   };
 
   const saveCurrentProject = async () => {
@@ -203,13 +347,22 @@ export default function IPOPoolManager() {
 
       if (error) throw error;
 
-      const cloudProjects = data.map((row) => ({
-        id: row.id,
-        savedDate: new Date().toISOString(), // Use current time since no timestamp column
-        ipoDetails: row.ipo_details,
-        participants: row.participants,
-        transfers: row.transfers,
-      }));
+      const cloudProjects = data
+        .map((row) => ({
+          id: row.id,
+          savedDate: new Date().toISOString(), // Use current time since no timestamp column
+          ipoDetails: row.ipo_details,
+          participants: row.participants,
+          transfers: row.transfers,
+        }))
+        // Skip junk/blank rows (no IPO name or price) so counts stay correct
+        .filter(
+          (p) =>
+            p.ipoDetails &&
+            p.ipoDetails.name &&
+            p.ipoDetails.name.trim() &&
+            Number(p.ipoDetails.ipoPrice) > 0
+        );
 
       setSavedProjects(cloudProjects);
       setIsOnline(true);
@@ -283,6 +436,53 @@ export default function IPOPoolManager() {
       };
       reader.readAsText(file);
     }
+  };
+
+  const cleanupDuplicateApplicants = () => {
+    const cleaned = savedProjects.map(project => {
+      if (!project.participants) return project;
+
+      // Filter out standalone applicants with 0 capital who are already listed as actual applicants
+      const cleanedParticipants = project.participants.filter(p => {
+        // If this person has capital, keep them
+        if (Number(p.initialCapital || 0) > 0) return true;
+
+        // If they have 0 capital, check if they're someone's actual applicant
+        const isActualApplicant = project.participants.some(otherP => {
+          // Check bracket notation
+          const bracketMatch = otherP.name.match(/^(.+?)\s*\((.+?)\)$/);
+          if (bracketMatch && bracketMatch[2].trim() === p.name) {
+            return true;
+          }
+          // Check actualApplicantName field
+          if (otherP.actualApplicantName === p.name) {
+            return true;
+          }
+          return false;
+        });
+
+        // If they're listed as actual applicant elsewhere, remove this standalone entry
+        return !isActualApplicant;
+      });
+
+      return {
+        ...project,
+        participants: cleanedParticipants
+      };
+    });
+
+    setSavedProjects(cleaned);
+
+    // Also update cloud
+    cleaned.forEach(async (project) => {
+      try {
+        await saveProjectToCloud(project);
+      } catch (error) {
+        console.error('Error updating cloud:', error);
+      }
+    });
+
+    alert('Cleaned up duplicate applicant entries!');
   };
 
   const addParticipant = () => {
@@ -362,32 +562,54 @@ export default function IPOPoolManager() {
     };
   };
 
+  // Helper function to process participant name with bracket notation
+  // E.g., "Saddiq (Sab)" means Saddiq provides capital, Sab applies
+  const processParticipantName = (participant) => {
+    const bracketMatch = participant.name.match(/^(.+?)\s*\((.+?)\)$/);
+    if (bracketMatch) {
+      return {
+        ...participant,
+        displayName: participant.name, // Keep original for display
+        name: bracketMatch[1].trim(), // Capital provider
+        willApply: false, // Capital provider doesn't apply
+        actualApplicantName: bracketMatch[2].trim() // Actual applicant
+      };
+    }
+    return {
+      ...participant,
+      displayName: participant.name
+    };
+  };
+
   const calculateDistribution = () => {
-    const totalCapital = participants.reduce(
+    // Process all participants to handle bracket notation
+    const processedParticipants = participants.map(processParticipantName);
+
+    const totalCapital = processedParticipants.reduce(
       (sum, p) => sum + Number(p.initialCapital),
       0
     );
 
-    const totalProfit = participants.reduce((sum, p) => {
+    const totalProfit = processedParticipants.reduce((sum, p) => {
       const details = calculateParticipantDetails(p);
       return sum + details.profitLoss;
     }, 0);
 
-    const whoGotAllocation = participants.filter((p) => p.gotAllocation);
-    const whoApplied = participants.filter((p) => p.willApply);
-    const onlyCapitalProviders = participants.filter((p) => !p.willApply);
+    const whoGotAllocation = processedParticipants.filter((p) => p.gotAllocation);
+    const whoApplied = processedParticipants.filter((p) => p.willApply);
+    const onlyCapitalProviders = processedParticipants.filter((p) => !p.willApply);
 
     // Get unique actual applicants (those who will actually apply)
     const actualApplicants = [
       ...new Set(
-        participants
+        processedParticipants
           .filter((p) => p.willApply || p.actualApplicantName.trim())
-          .map((p) => p.willApply ? p.name : p.actualApplicantName.trim())
-          .filter(name => name.trim())
+          .map((p) => (p.willApply ? p.name : p.actualApplicantName.trim()))
+          .filter((name) => name.trim())
       ),
     ];
 
-    let distribution = participants.map((p) => {
+    let distribution = processedParticipants.map((p) => {
       const details = calculateParticipantDetails(p);
       return {
         ...p,
@@ -406,37 +628,62 @@ export default function IPOPoolManager() {
       };
     });
 
-    if (totalProfit !== 0 && whoGotAllocation.length > 0) {
-      if (onlyCapitalProviders.length === 0) {
-        const bonusPool = totalProfit * 0.1;
-        const mainPool = totalProfit * 0.9;
-        const bonusPerWinner = bonusPool / whoGotAllocation.length;
+    // New fairer formula:
+    // 40% allocation luck bonus (split 70/30 if different applicant)
+    // 60% distributed by capital %
+    if (totalProfit !== 0) {
+      // Step 1: Calculate 60% capital pool for everyone
+      const capitalPool = totalProfit * 0.6;
 
-        distribution = distribution.map((p) => {
-          let share = (Number(p.initialCapital) / totalCapital) * mainPool;
-          if (p.gotAllocation) {
-            share += bonusPerWinner;
-          }
-          return { ...p, profitShare: share };
-        });
-      } else {
-        // Use actual applicants for bonus calculation
-        const applierBonus = totalProfit * 0.3;
-        const capitalPool = totalProfit * 0.7;
-        const bonusPerApplier =
-          actualApplicants.length > 0
-            ? applierBonus / actualApplicants.length
-            : 0;
+      distribution = distribution.map((p) => {
+        let share = (Number(p.initialCapital) / totalCapital) * capitalPool;
+        return { ...p, profitShare: share };
+      });
 
-        distribution = distribution.map((p) => {
-          let share = (Number(p.initialCapital) / totalCapital) * capitalPool;
-          // Give bonus to actual applicant
-          if (p.willApply || (p.actualApplicantName.trim() && actualApplicants.includes(p.actualApplicantName.trim()))) {
-            share += bonusPerApplier;
+      // Step 2: Add 40% allocation luck bonus for those who got allocation
+      processedParticipants.forEach((p) => {
+        if (p.gotAllocation) {
+          const details = calculateParticipantDetails(p);
+          const actualProfit = details.profitLoss;
+          const allocationBonus = actualProfit * 0.4;
+
+          // Find this person in distribution
+          const distPerson = distribution.find((d) => d.id === p.id);
+          if (!distPerson) return;
+
+          // Check if they applied themselves or someone else did
+          if (p.willApply) {
+            // Applied themselves - keep 100% of allocation bonus
+            distPerson.profitShare += allocationBonus;
+          } else if (p.actualApplicantName && p.actualApplicantName.trim()) {
+            // Someone else applied - split 70/30
+            // Capital provider (this person) gets 70%
+            distPerson.profitShare += allocationBonus * 0.7;
+
+            // Applicant gets 30% - find them in distribution by name
+            const applicant = distribution.find((d) => d.name === p.actualApplicantName.trim());
+            if (applicant) {
+              applicant.profitShare += allocationBonus * 0.3;
+            } else {
+              // If applicant not in pool, create entry for them
+              const applicantEntry = {
+                id: `applicant-${p.actualApplicantName.trim()}`,
+                name: p.actualApplicantName.trim(),
+                initialCapital: 0,
+                capitalPercent: 0,
+                profitShare: allocationBonus * 0.3,
+                actualProfitReceived: 0,
+                tierMatchingTransferOut: 0,
+                tierMatchingTransferIn: 0,
+                settlementTransferOut: 0,
+                settlementTransferIn: 0,
+                netPosition: 0,
+              };
+              distribution.push(applicantEntry);
+            }
           }
-          return { ...p, profitShare: share };
-        });
-      }
+        }
+      });
     }
 
     distribution = distribution.map((p) => {
@@ -518,6 +765,375 @@ export default function IPOPoolManager() {
     return settlements;
   };
 
+  // Calculate aggregated summary across all saved projects
+  const calculateAggregatedSummary = () => {
+    const summary = {};
+
+    if (!savedProjects || savedProjects.length === 0) {
+      return [];
+    }
+
+    savedProjects.forEach((project) => {
+      // Calculate distribution for this project
+      if (!project || !project.ipoDetails || !project.participants) {
+        return; // Skip invalid projects
+      }
+
+      const tempIpoDetails = project.ipoDetails;
+      const tempParticipants = project.participants;
+      const tempTransfers = project.transfers || [];
+
+      const totalCapital = tempParticipants.reduce(
+        (sum, p) => sum + Number(p.initialCapital || 0),
+        0
+      );
+
+      const totalProfit = tempParticipants.reduce((sum, p) => {
+        const ipoPrice = Number(tempIpoDetails.ipoPrice || 0);
+        const sellingPrice = Number(p.sellingPrice || 0);
+        const lotSize = Number(tempIpoDetails.lotSize || 100);
+        const sellingFee = Number(p.sellingFee || 0);
+        const lotsAllocated = Number(p.lotsAllocated || 0);
+
+        const grossProfit = lotsAllocated * (sellingPrice - ipoPrice) * lotSize;
+        const profitLoss = grossProfit - sellingFee;
+        return sum + profitLoss;
+      }, 0);
+
+      const whoGotAllocation = tempParticipants.filter((p) => p.gotAllocation);
+      const whoApplied = tempParticipants.filter((p) => p.willApply);
+      const onlyCapitalProviders = tempParticipants.filter((p) => !p.willApply);
+
+      // Calculate profit share for each participant
+      tempParticipants.forEach((p) => {
+        if (!p || !p.name) return; // Skip invalid participants
+
+        // Process bracket notation (e.g., "Saddiq (Sab)")
+        let processedP = { ...p };
+        const bracketMatch = p.name.match(/^(.+?)\s*\((.+?)\)$/);
+        if (bracketMatch) {
+          processedP.name = bracketMatch[1].trim();
+          processedP.willApply = false;
+          processedP.actualApplicantName = bracketMatch[2].trim();
+        }
+
+        const ipoPrice = Number(tempIpoDetails.ipoPrice || 0);
+        const sellingPrice = Number(p.sellingPrice || 0);
+        const lotSize = Number(tempIpoDetails.lotSize || 100);
+        const lotsApplied = Number(p.lotsApplied || 0);
+        const lotsAllocated = Number(p.lotsAllocated || 0);
+
+        // Calculate or use stored selling fee
+        let sellingFee = Number(p.sellingFee || 0);
+        if (sellingFee === 0 && lotsAllocated > 0 && sellingPrice > 0) {
+          // Auto-calculate M+ fee if not already set
+          const sellingAmount = lotsAllocated * lotSize * sellingPrice;
+          const brokerageFee = Math.max(sellingAmount * 0.001, 8);
+          const clearingFee = sellingAmount * 0.0003;
+          const stampDuty = Math.max(Math.ceil(sellingAmount / 1000), 1);
+          sellingFee = brokerageFee + clearingFee + stampDuty;
+        }
+
+        const capitalUsedToApply = lotsApplied * ipoPrice * lotSize;
+        const grossProfit = lotsAllocated * (sellingPrice - ipoPrice) * lotSize;
+        const actualProfitReceived = grossProfit - sellingFee;
+
+        const capitalPercent =
+          totalCapital > 0 ? (Number(processedP.initialCapital) / totalCapital) * 100 : 0;
+
+        // New fairer formula:
+        // 60% distributed by capital % to everyone
+        // 40% allocation luck bonus (split 70/30 if different applicant)
+        let profitShare = 0;
+        if (totalProfit !== 0) {
+          // Step 1: Everyone gets their capital % of 60% pool
+          const capitalPool = totalProfit * 0.6;
+          profitShare = (Number(processedP.initialCapital) / totalCapital) * capitalPool;
+
+          // Step 2: If this person got allocation, add 40% allocation bonus
+          if (processedP.gotAllocation) {
+            const allocationBonus = actualProfitReceived * 0.4;
+
+            if (processedP.willApply) {
+              // Applied themselves - keep 100% of allocation bonus
+              profitShare += allocationBonus;
+            } else if (processedP.actualApplicantName && processedP.actualApplicantName.trim()) {
+              // Someone else applied - capital provider gets 70%
+              profitShare += allocationBonus * 0.7;
+
+              // Note: Applicant's 30% will be added when we process them
+              // If applicant is also a participant, they'll get it in their own calculation
+            }
+          }
+
+          // Step 3: If this person applied for someone else, add their 30% applicant bonus
+          tempParticipants.forEach((otherP) => {
+            const otherBracket = otherP.name.match(/^(.+?)\s*\((.+?)\)$/);
+            let otherActualApplicant = '';
+
+            if (otherBracket) {
+              otherActualApplicant = otherBracket[2].trim();
+            } else if (!otherP.willApply && otherP.actualApplicantName) {
+              otherActualApplicant = otherP.actualApplicantName.trim();
+            }
+
+            // If this person is the applicant for someone who got allocation
+            if (otherActualApplicant === processedP.name && otherP.gotAllocation) {
+              const otherIpoPrice = Number(tempIpoDetails.ipoPrice || 0);
+              const otherSellingPrice = Number(otherP.sellingPrice || 0);
+              const otherLotSize = Number(tempIpoDetails.lotSize || 100);
+              const otherLotsAllocated = Number(otherP.lotsAllocated || 0);
+
+              // Calculate selling fee if not set
+              let otherSellingFee = Number(otherP.sellingFee || 0);
+              if (otherSellingFee === 0 && otherLotsAllocated > 0 && otherSellingPrice > 0) {
+                const otherSellingAmount = otherLotsAllocated * otherLotSize * otherSellingPrice;
+                otherSellingFee = Math.max(otherSellingAmount * 0.001, 8) +
+                                  otherSellingAmount * 0.0003 +
+                                  Math.max(Math.ceil(otherSellingAmount / 1000), 1);
+              }
+
+              const otherGrossProfit = otherLotsAllocated * (otherSellingPrice - otherIpoPrice) * otherLotSize;
+              const otherActualProfit = otherGrossProfit - otherSellingFee;
+              const otherAllocationBonus = otherActualProfit * 0.4;
+
+              // Applicant gets 30% of the allocation bonus
+              profitShare += otherAllocationBonus * 0.3;
+            }
+          });
+        }
+
+        const tierMatchingTransferOut = tempTransfers
+          .filter((t) => t.from === p.id)
+          .reduce((sum, t) => sum + Number(t.amount), 0);
+        const tierMatchingTransferIn = tempTransfers
+          .filter((t) => t.to === p.id)
+          .reduce((sum, t) => sum + Number(t.amount), 0);
+
+        const netPosition =
+          profitShare + tierMatchingTransferIn - tierMatchingTransferOut;
+
+        // Aggregate by participant name (use processed name for proper grouping)
+        const aggregateName = processedP.name;
+        if (!summary[aggregateName]) {
+          summary[aggregateName] = {
+            name: aggregateName,
+            totalCapitalContributed: 0,
+            totalCapitalUsed: 0,
+            totalProfit: 0,
+            totalProfitShare: 0,
+            totalNetPosition: 0,
+            ipoCount: 0,
+            allocationCount: 0,
+            totalLotsAllocated: 0,
+            totalAllocationCapital: 0,
+            ipoDetails: [],
+          };
+        }
+
+        summary[aggregateName].totalCapitalContributed += Number(processedP.initialCapital || 0);
+        summary[aggregateName].totalCapitalUsed += capitalUsedToApply;
+        summary[aggregateName].totalProfit += actualProfitReceived;
+        summary[aggregateName].totalProfitShare += profitShare;
+        summary[aggregateName].totalNetPosition += netPosition;
+        summary[aggregateName].ipoCount += 1;
+
+        // Track allocations
+        if (processedP.gotAllocation && lotsAllocated > 0) {
+          summary[aggregateName].allocationCount += 1;
+          summary[aggregateName].totalLotsAllocated += lotsAllocated;
+          summary[aggregateName].totalAllocationCapital += lotsAllocated * ipoPrice * lotSize;
+        }
+        summary[aggregateName].ipoDetails.push({
+          ipoName: tempIpoDetails.name || 'Unknown IPO',
+          capital: Number(processedP.initialCapital || 0),
+          profitShare: profitShare,
+          netPosition: netPosition,
+        });
+      });
+
+      // After processing all participants, check for non-participant applicants
+      tempParticipants.forEach((otherP) => {
+        const otherBracket = otherP.name.match(/^(.+?)\s*\((.+?)\)$/);
+        let applicantName = '';
+
+        if (otherBracket) {
+          applicantName = otherBracket[2].trim();
+        } else if (!otherP.willApply && otherP.actualApplicantName) {
+          applicantName = otherP.actualApplicantName.trim();
+        }
+
+        // If there's an applicant who got allocation
+        if (applicantName && otherP.gotAllocation) {
+          // Check if this applicant is already a participant
+          const applicantIsParticipant = tempParticipants.some(p => {
+            const pBracket = p.name.match(/^(.+?)\s*\((.+?)\)$/);
+            const pName = pBracket ? pBracket[1].trim() : p.name;
+            return pName === applicantName;
+          });
+
+          if (!applicantIsParticipant) {
+            // Calculate the applicant bonus
+            const otherIpoPrice = Number(tempIpoDetails.ipoPrice || 0);
+            const otherSellingPrice = Number(otherP.sellingPrice || 0);
+            const otherLotSize = Number(tempIpoDetails.lotSize || 100);
+            const otherLotsAllocated = Number(otherP.lotsAllocated || 0);
+
+            // Calculate selling fee
+            let otherSellingFee = Number(otherP.sellingFee || 0);
+            if (otherSellingFee === 0 && otherLotsAllocated > 0 && otherSellingPrice > 0) {
+              const otherSellingAmount = otherLotsAllocated * otherLotSize * otherSellingPrice;
+              otherSellingFee = Math.max(otherSellingAmount * 0.001, 8) +
+                                otherSellingAmount * 0.0003 +
+                                Math.max(Math.ceil(otherSellingAmount / 1000), 1);
+            }
+
+            const otherGrossProfit = otherLotsAllocated * (otherSellingPrice - otherIpoPrice) * otherLotSize;
+            const otherActualProfit = otherGrossProfit - otherSellingFee;
+            const applicantBonus = otherActualProfit * 0.4 * 0.3;
+
+            if (!summary[applicantName]) {
+              // Create new entry for the applicant
+              summary[applicantName] = {
+                name: applicantName,
+                totalCapitalContributed: 0,
+                totalCapitalUsed: 0,
+                totalProfit: 0,
+                totalProfitShare: applicantBonus,
+                totalNetPosition: applicantBonus,
+                ipoCount: 1,
+                allocationCount: 0,
+                totalLotsAllocated: 0,
+                totalAllocationCapital: 0,
+                ipoDetails: [{
+                  ipoName: tempIpoDetails.name || 'Unknown IPO',
+                  capital: 0,
+                  profitShare: applicantBonus,
+                  netPosition: applicantBonus,
+                }]
+              };
+            } else {
+              // Add to existing applicant entry
+              summary[applicantName].totalProfitShare += applicantBonus;
+              summary[applicantName].totalNetPosition += applicantBonus;
+              summary[applicantName].ipoCount += 1;
+              summary[applicantName].ipoDetails.push({
+                ipoName: tempIpoDetails.name || 'Unknown IPO',
+                capital: 0,
+                profitShare: applicantBonus,
+                netPosition: applicantBonus,
+              });
+            }
+          }
+        }
+      });
+    });
+
+    return Object.values(summary);
+  };
+
+  // Clean, money-conserving per-member totals across all IPOs.
+  // Used by the Summary standings and Settlements tabs so the books always balance.
+  // cash = what each member physically pocketed from selling allocated shares.
+  // fair = what each member is owed under the 60% capital / 40% allocation (70/30) formula.
+  const computeMemberTotals = () => {
+    const mPlusFee = (amt) =>
+      amt > 0
+        ? Math.max(amt * 0.001, 8) + amt * 0.0003 + Math.max(Math.ceil(amt / 1000), 1)
+        : 0;
+    // Strip invisible/zero-width characters so e.g. "⁠Deena" and "Deena" merge.
+    const clean = (s) =>
+      (s || "")
+        .normalize("NFKC")
+        .replace(/[​-‍⁠﻿]/g, "")
+        .trim();
+    const totals = {};
+    const touch = (name) => {
+      if (!totals[name]) {
+        totals[name] = {
+          name,
+          totalCapitalContributed: 0,
+          totalCapitalUsed: 0,
+          totalProfit: 0, // cash pocketed
+          totalProfitShare: 0, // fair share
+          ipoCount: 0,
+          allocationCount: 0,
+          totalLotsAllocated: 0,
+        };
+      }
+      return totals[name];
+    };
+
+    (savedProjects || []).forEach((project) => {
+      const d = project?.ipoDetails;
+      if (!d || !d.name || !(Number(d.ipoPrice) > 0)) return;
+      const price = Number(d.ipoPrice);
+      const lot = Number(d.lotSize || 100);
+      const parts = project.participants || [];
+      const totalCap = parts.reduce((s, p) => s + Number(p.initialCapital || 0), 0);
+
+      const meta = parts.map((p) => {
+        const bm = clean(p.name).match(/^(.+?)\s*\((.+?)\)$/);
+        const capName = bm ? clean(bm[1]) : clean(p.name);
+        const applicant = bm
+          ? clean(bm[2])
+          : !p.willApply
+          ? clean(p.actualApplicantName)
+          : "";
+        const sp = Number(p.sellingPrice || 0);
+        const la = Number(p.lotsAllocated || 0);
+        const applied = Number(p.lotsApplied || 0);
+        const capUsed = applied * price * lot; // capital actually put to work applying
+        let fee = Number(p.sellingFee || 0);
+        if (fee === 0 && la > 0 && sp > 0) fee = mPlusFee(la * lot * sp);
+        const net = p.gotAllocation ? la * (sp - price) * lot - fee : 0;
+        return { capName, applicant, cap: Number(p.initialCapital || 0), capUsed, got: p.gotAllocation, la, net };
+      });
+
+      const totalProfit = meta.reduce((s, m) => s + m.net, 0);
+      const totalCapUsed = meta.reduce((s, m) => s + m.capUsed, 0);
+
+      meta.forEach((m) => {
+        const rec = touch(m.capName);
+        rec.totalCapitalContributed += m.cap;
+        rec.totalCapitalUsed += m.capUsed;
+        rec.ipoCount += 1;
+        if (m.got) {
+          rec.totalProfit += m.net;
+          rec.allocationCount += 1;
+          rec.totalLotsAllocated += m.la;
+        }
+        if (totalProfit !== 0) {
+          // 60% capital pool is shared by how much capital each member actually
+          // used to apply (lots applied x price), not just what they parked in the pool.
+          const weight =
+            totalCapUsed > 0
+              ? m.capUsed / totalCapUsed
+              : totalCap > 0
+              ? m.cap / totalCap
+              : 0;
+          rec.totalProfitShare += weight * totalProfit * 0.6;
+          if (m.got && m.net > 0) {
+            const bonus = m.net * 0.4;
+            if (m.applicant) {
+              rec.totalProfitShare += bonus * 0.7;
+              touch(m.applicant).totalProfitShare += bonus * 0.3;
+              touch(m.applicant).ipoCount += 0; // ensure applicant exists
+            } else {
+              rec.totalProfitShare += bonus;
+            }
+          }
+        }
+      });
+    });
+
+    return Object.values(totals).map((t) => ({
+      ...t,
+      totalNetPosition: t.totalProfitShare, // final amount each member keeps
+      settleBalance: t.totalProfitShare - t.totalProfit, // + = receive, - = pay
+    }));
+  };
+
   const distribution = calculateDistribution();
   const totalCapital = participants.reduce(
     (sum, p) => sum + Number(p.initialCapital),
@@ -579,6 +1195,13 @@ export default function IPOPoolManager() {
                 New
               </button>
               <button
+                onClick={() => setShowImportModal(true)}
+                className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition-colors"
+              >
+                <FileInput className="w-5 h-5" />
+                Quick Import
+              </button>
+              <button
                 onClick={saveCurrentProject}
                 disabled={isLoading}
                 className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors disabled:bg-gray-400"
@@ -609,6 +1232,174 @@ export default function IPOPoolManager() {
           )}
         </div>
 
+        {showImportModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
+              <div className="sticky top-0 bg-gradient-to-r from-orange-600 to-red-600 text-white p-6 rounded-t-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-2xl font-bold">Quick Import IPO Data</h2>
+                    <p className="text-sm opacity-90 mt-1">
+                      Paste your IPO data and we'll extract the information automatically
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowImportModal(false);
+                      handleClearImport();
+                    }}
+                    className="text-white hover:bg-white hover:bg-opacity-20 p-2 rounded-lg transition-colors"
+                  >
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-6">
+                <div className="mb-4">
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Paste Your IPO Data Here
+                  </label>
+                  <textarea
+                    value={importText}
+                    onChange={(e) => setImportText(e.target.value)}
+                    className="w-full h-64 px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 focus:outline-none font-mono text-sm"
+                    placeholder={`Paste your data in this format:
+
+JSSOLAR | JS SOLAR HOLDING BERHAD (RM0.31 : 23 Sept 2025)
+1. Zaim tier 8 - 11100 unit - RM3441 ✅ (5000 unit) sold RM0.40
+2. Fairuz tier 9 - 20100 unit - RM6233 ❌
+
+You can paste multiple IPOs at once!`}
+                  />
+                </div>
+
+                <div className="flex gap-3 mb-4">
+                  <button
+                    onClick={handleParseText}
+                    disabled={!importText.trim()}
+                    className="flex items-center gap-2 bg-orange-600 text-white px-6 py-3 rounded-lg hover:bg-orange-700 transition-colors disabled:bg-gray-400 font-semibold"
+                  >
+                    <Check className="w-5 h-5" />
+                    Parse & Preview
+                  </button>
+                  {parsedData && parsedData.length > 1 && (
+                    <button
+                      onClick={handleImportAllIPOs}
+                      disabled={isLoading}
+                      className="flex items-center gap-2 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 font-semibold"
+                    >
+                      <Save className="w-5 h-5" />
+                      {isLoading ? "Importing..." : `Import All ${parsedData.length} IPOs to Cloud`}
+                    </button>
+                  )}
+                  <button
+                    onClick={handleClearImport}
+                    className="flex items-center gap-2 bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600 transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                    Clear
+                  </button>
+                </div>
+
+                {parseError && (
+                  <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-4">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
+                      <div>
+                        <p className="font-semibold text-red-800">Parse Error</p>
+                        <p className="text-sm text-red-700">{parseError}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {parsedData && parsedData.length > 0 && (
+                  <div className="mt-6">
+                    <h3 className="text-xl font-bold text-gray-800 mb-4">
+                      Extracted {parsedData.length} IPO{parsedData.length > 1 ? 's' : ''} - Please Confirm
+                    </h3>
+
+                    <div className="space-y-4">
+                      {parsedData.map((ipoData, index) => (
+                        <div
+                          key={index}
+                          className="border-2 border-gray-200 rounded-lg p-5 hover:border-orange-500 transition-colors"
+                        >
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="flex-1">
+                              <h4 className="text-lg font-bold text-gray-800">
+                                {ipoData.ipoDetails.name}
+                              </h4>
+                              <div className="text-sm text-gray-600 mt-1">
+                                <p>IPO Price: RM {ipoData.ipoDetails.ipoPrice}</p>
+                                <p>Application Date: {ipoData.ipoDetails.applicationDate || 'Not specified'}</p>
+                                <p>Lot Size: {ipoData.ipoDetails.lotSize} units</p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleImportIPO(ipoData)}
+                              className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors font-semibold"
+                            >
+                              Import This IPO
+                            </button>
+                          </div>
+
+                          <div className="bg-gray-50 rounded-lg p-4">
+                            <p className="font-semibold text-gray-700 mb-3">
+                              {ipoData.participants.length} Participants Found:
+                            </p>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="border-b">
+                                    <th className="text-left py-2 px-2">Name</th>
+                                    <th className="text-right py-2 px-2">Capital (RM)</th>
+                                    <th className="text-right py-2 px-2">Lots Applied</th>
+                                    <th className="text-center py-2 px-2">Got Allocation?</th>
+                                    <th className="text-right py-2 px-2">Lots Allocated</th>
+                                    <th className="text-right py-2 px-2">Selling Price</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {ipoData.participants.map((p, pIndex) => (
+                                    <tr key={pIndex} className="border-b hover:bg-white">
+                                      <td className="py-2 px-2 font-medium">{p.name}</td>
+                                      <td className="py-2 px-2 text-right">{p.initialCapital.toLocaleString()}</td>
+                                      <td className="py-2 px-2 text-right">{p.lotsApplied}</td>
+                                      <td className="py-2 px-2 text-center">
+                                        {p.gotAllocation ? (
+                                          <span className="bg-green-200 px-2 py-1 rounded text-xs">✓ Yes</span>
+                                        ) : (
+                                          <span className="bg-gray-200 px-2 py-1 rounded text-xs">No</span>
+                                        )}
+                                      </td>
+                                      <td className="py-2 px-2 text-right">{p.lotsAllocated || '-'}</td>
+                                      <td className="py-2 px-2 text-right">
+                                        {p.sellingPrice > 0 ? `RM ${p.sellingPrice.toFixed(2)}` : '-'}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            <div className="mt-3 text-xs text-gray-600 bg-blue-50 p-3 rounded">
+                              <p className="font-semibold text-blue-800 mb-1">Note:</p>
+                              <p>• You can edit all details in the Participants tab after importing</p>
+                              <p>• <strong className="text-green-700">Selling fees auto-calculate</strong> using M+ rates when you enter selling price</p>
+                              <p>• Transfer information (tier matching) can be added in the Transfers tab</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {showProjectList && (
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
             <div className="flex items-center justify-between mb-4">
@@ -621,6 +1412,15 @@ export default function IPOPoolManager() {
                 </p>
               </div>
               <div className="flex gap-2">
+                <button
+                  onClick={cleanupDuplicateApplicants}
+                  disabled={savedProjects.length === 0}
+                  className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition-colors disabled:bg-gray-400"
+                  title="Remove duplicate Sab entries with 0 capital"
+                >
+                  <MinusCircle className="w-5 h-5" />
+                  Cleanup Duplicates
+                </button>
                 <label className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors cursor-pointer">
                   <Upload className="w-5 h-5" />
                   Import
@@ -696,6 +1496,17 @@ export default function IPOPoolManager() {
         <div className="bg-white rounded-xl shadow-lg overflow-hidden mb-6">
           <div className="flex border-b overflow-x-auto">
             <button
+              onClick={() => setActiveTab("summary")}
+              className={`flex-shrink-0 px-6 py-4 font-semibold transition-colors ${
+                activeTab === "summary"
+                  ? "bg-gradient-to-r from-purple-600 to-pink-600 text-white"
+                  : "bg-gray-50 text-gray-600 hover:bg-gray-100"
+              }`}
+            >
+              <TrendingUp className="w-5 h-5 inline mr-2" />
+              All IPOs Summary
+            </button>
+            <button
               onClick={() => setActiveTab("ipo")}
               className={`flex-shrink-0 px-6 py-4 font-semibold transition-colors ${
                 activeTab === "ipo"
@@ -738,9 +1549,347 @@ export default function IPOPoolManager() {
               <Calculator className="w-5 h-5 inline mr-2" />
               Distribution
             </button>
+            <button
+              onClick={() => setActiveTab("settlements")}
+              className={`flex-shrink-0 px-6 py-4 font-semibold transition-colors ${
+                activeTab === "settlements"
+                  ? "bg-gradient-to-r from-yellow-500 to-orange-500 text-white"
+                  : "bg-yellow-50 text-yellow-700 hover:bg-yellow-100"
+              }`}
+            >
+              💸 Settlements
+            </button>
           </div>
 
           <div className="p-6">
+            {activeTab === "summary" && (
+              <div>
+                <h2 className="text-2xl font-bold text-gray-800 mb-4">
+                  Aggregated Summary - All IPO Projects
+                </h2>
+
+                {!savedProjects || savedProjects.length === 0 ? (
+                  <div className="text-center py-12">
+                    <AlertCircle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                    <h3 className="text-xl font-semibold text-gray-700 mb-2">
+                      No Saved Projects Yet
+                    </h3>
+                    <p className="text-gray-500 mb-4">
+                      Import or create IPO projects to see aggregated summary here.
+                    </p>
+                    <button
+                      onClick={() => setShowImportModal(true)}
+                      className="bg-orange-600 text-white px-6 py-3 rounded-lg hover:bg-orange-700 transition-colors font-semibold"
+                    >
+                      Quick Import IPOs
+                    </button>
+                  </div>
+                ) : (() => {
+                  try {
+                    const summaryData = computeMemberTotals();
+                    return (
+                  <>
+                    <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg p-6 mb-6">
+                      <h3 className="text-xl font-bold mb-3">
+                        Portfolio Overview
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                          <p className="text-sm opacity-90">Total IPO Projects</p>
+                          <p className="text-3xl font-bold">{savedProjects.length}</p>
+                        </div>
+                        <div>
+                          <p className="text-sm opacity-90">Total Capital Deployed</p>
+                          <p className="text-3xl font-bold">
+                            RM{" "}
+                            {savedProjects
+                              .reduce((sum, project) => {
+                                if (!project.participants) return sum;
+                                return (
+                                  sum +
+                                  project.participants.reduce(
+                                    (s, p) => s + Number(p.initialCapital || 0),
+                                    0
+                                  )
+                                );
+                              }, 0)
+                              .toLocaleString()}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-sm opacity-90">Net Profit/Loss</p>
+                          <p className="text-3xl font-bold">
+                            RM{" "}
+                            {summaryData
+                              .reduce((sum, p) => sum + (p.totalNetPosition || 0), 0)
+                              .toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Member standings */}
+                    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden mb-6">
+                      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
+                        <h3 className="font-bold text-gray-800">Member Standings — All {savedProjects.length} IPOs</h3>
+                        <button
+                          onClick={() => setActiveTab("settlements")}
+                          className="text-sm bg-yellow-100 text-yellow-800 px-3 py-1.5 rounded-lg hover:bg-yellow-200 transition-colors font-medium"
+                        >
+                          💸 See who pays who →
+                        </button>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-xs text-gray-500 bg-gray-50 border-b">
+                              <th className="text-left px-5 py-3 font-medium">Member</th>
+                              <th className="text-right px-4 py-3 font-medium">Total Capital</th>
+                              <th className="text-right px-4 py-3 font-medium">Cap %</th>
+                              <th className="text-center px-4 py-3 font-medium">IPOs / Won</th>
+                              <th className="text-right px-4 py-3 font-medium">Actual Profit</th>
+                              <th className="text-right px-4 py-3 font-medium">Fair Share</th>
+                              <th className="text-right px-5 py-3 font-medium">Net Position</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(() => {
+                              const totalCapAll = summaryData.reduce((s, p) => s + (p.totalCapitalContributed || 0), 0);
+                              return summaryData
+                                .slice()
+                                .sort((a, b) => b.totalNetPosition - a.totalNetPosition)
+                                .map((p, idx) => {
+                                  const capPct = totalCapAll > 0 ? (p.totalCapitalContributed / totalCapAll) * 100 : 0;
+                                  return (
+                                    <tr key={idx} className="border-b last:border-0 hover:bg-gray-50">
+                                      <td className="px-5 py-3 font-semibold text-gray-800">{p.name}</td>
+                                      <td className="px-4 py-3 text-right text-gray-600">RM {p.totalCapitalContributed.toLocaleString()}</td>
+                                      <td className="px-4 py-3 text-right text-gray-500">{capPct.toFixed(1)}%</td>
+                                      <td className="px-4 py-3 text-center text-gray-500">
+                                        {p.ipoCount} / <span className="text-green-600 font-medium">{p.allocationCount}</span>
+                                      </td>
+                                      <td className="px-4 py-3 text-right text-blue-600 font-medium">
+                                        {p.totalProfit > 0 ? `RM ${p.totalProfit.toFixed(2)}` : "—"}
+                                      </td>
+                                      <td className="px-4 py-3 text-right text-indigo-600 font-medium">
+                                        RM {p.totalProfitShare.toFixed(2)}
+                                      </td>
+                                      <td className={`px-5 py-3 text-right font-bold ${p.totalNetPosition >= 0 ? "text-green-600" : "text-red-600"}`}>
+                                        {p.totalNetPosition >= 0 ? "+" : ""}RM {p.totalNetPosition.toFixed(2)}
+                                      </td>
+                                    </tr>
+                                  );
+                                });
+                            })()}
+                          </tbody>
+                          <tfoot>
+                            <tr className="bg-gray-50 border-t-2 border-gray-200 font-semibold text-sm">
+                              <td className="px-5 py-3 text-gray-700">Total</td>
+                              <td className="px-4 py-3 text-right text-gray-700">
+                                RM {summaryData.reduce((s, p) => s + (p.totalCapitalContributed || 0), 0).toLocaleString()}
+                              </td>
+                              <td className="px-4 py-3 text-right text-gray-500">100%</td>
+                              <td className="px-4 py-3"></td>
+                              <td className="px-4 py-3 text-right text-blue-600">
+                                RM {summaryData.reduce((s, p) => s + (p.totalProfit || 0), 0).toFixed(2)}
+                              </td>
+                              <td className="px-4 py-3 text-right text-indigo-600">
+                                RM {summaryData.reduce((s, p) => s + (p.totalProfitShare || 0), 0).toFixed(2)}
+                              </td>
+                              <td className="px-5 py-3 text-right text-green-600">
+                                RM {summaryData.reduce((s, p) => s + (p.totalNetPosition || 0), 0).toFixed(2)}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div className="mt-6">
+                      <h3 className="font-bold text-gray-800 text-xl mb-4">📋 Per-IPO Breakdown</h3>
+                      <div className="space-y-4">
+                        {savedProjects
+                          .filter(p => p && p.ipoDetails && p.ipoDetails.name && p.ipoDetails.ipoPrice)
+                          .map((project, projectIdx) => {
+                          const tempIpoDetails = project.ipoDetails;
+                          const tempParticipants = project.participants || [];
+                          const tempTransfers = project.transfers || [];
+                          const ipoPrice = Number(tempIpoDetails.ipoPrice || 0);
+                          const lotSize = Number(tempIpoDetails.lotSize || 100);
+
+                          const totalCapital = tempParticipants.reduce((s, p) => s + Number(p.initialCapital || 0), 0);
+                          const totalCapUsed = tempParticipants.reduce((s, p) => s + Number(p.lotsApplied || 0) * ipoPrice * lotSize, 0);
+                          const totalProfit = tempParticipants.reduce((s, p) => {
+                            const sp = Number(p.sellingPrice || 0);
+                            const la = Number(p.lotsAllocated || 0);
+                            let fee = Number(p.sellingFee || 0);
+                            if (fee === 0 && la > 0 && sp > 0) {
+                              const amt = la * lotSize * sp;
+                              fee = Math.max(amt * 0.001, 8) + amt * 0.0003 + Math.max(Math.ceil(amt / 1000), 1);
+                            }
+                            return s + la * (sp - ipoPrice) * lotSize - fee;
+                          }, 0);
+
+                          const allocated = tempParticipants.filter(p => p.gotAllocation);
+                          const pending = totalProfit === 0 && allocated.length > 0;
+
+                          return (
+                            <div key={projectIdx} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                              {/* IPO Header */}
+                              <div className="flex items-center justify-between px-5 py-4 bg-gray-50 border-b border-gray-200">
+                                <div>
+                                  <h4 className="font-bold text-gray-900 text-base">{tempIpoDetails.name}</h4>
+                                  <div className="flex gap-4 text-xs text-gray-500 mt-1">
+                                    <span>{tempIpoDetails.applicationDate || '—'}</span>
+                                    <span>RM{ipoPrice} / share</span>
+                                    <span>Pool: RM {totalCapital.toLocaleString()}</span>
+                                  </div>
+                                </div>
+                                <div className={`text-right px-4 py-2 rounded-lg ${totalProfit > 0 ? 'bg-green-50' : totalProfit < 0 ? 'bg-red-50' : 'bg-gray-100'}`}>
+                                  <div className="text-xs text-gray-500 mb-0.5">Total Profit</div>
+                                  <div className={`font-bold text-lg ${totalProfit > 0 ? 'text-green-600' : totalProfit < 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                                    {totalProfit !== 0 ? `RM ${totalProfit.toFixed(2)}` : pending ? 'Pending sell' : '—'}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Participants table */}
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="text-xs text-gray-500 border-b bg-gray-50">
+                                    <th className="text-left px-5 py-2 font-medium">Name</th>
+                                    <th className="text-right px-4 py-2 font-medium">Capital</th>
+                                    <th className="text-right px-4 py-2 font-medium">Applied %</th>
+                                    <th className="text-center px-4 py-2 font-medium">Allocation</th>
+                                    <th className="text-right px-4 py-2 font-medium">Net Profit</th>
+                                    <th className="text-right px-4 py-2 font-medium">Fair Share</th>
+                                    <th className="text-right px-5 py-2 font-medium">ROI</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {tempParticipants.map((p, pIdx) => {
+                                    const sp = Number(p.sellingPrice || 0);
+                                    const la = Number(p.lotsAllocated || 0);
+                                    let fee = Number(p.sellingFee || 0);
+                                    if (fee === 0 && la > 0 && sp > 0) {
+                                      const amt = la * lotSize * sp;
+                                      fee = Math.max(amt * 0.001, 8) + amt * 0.0003 + Math.max(Math.ceil(amt / 1000), 1);
+                                    }
+                                    const netProfit = la * (sp - ipoPrice) * lotSize - fee;
+                                    const capUsed = Number(p.lotsApplied || 0) * ipoPrice * lotSize;
+                                    const capPct = totalCapUsed > 0 ? (capUsed / totalCapUsed) * 100 : 0;
+
+                                    let processedP = { ...p };
+                                    const bm = p.name.match(/^(.+?)\s*\((.+?)\)$/);
+                                    if (bm) { processedP.willApply = false; processedP.actualApplicantName = bm[2].trim(); }
+
+                                    let fairShare = 0;
+                                    if (totalProfit !== 0) {
+                                      const weight = totalCapUsed > 0 ? capUsed / totalCapUsed : 0;
+                                      fairShare = weight * totalProfit * 0.6;
+                                      if (p.gotAllocation && netProfit > 0) {
+                                        const bonus = netProfit * 0.4;
+                                        fairShare += processedP.willApply !== false ? bonus : bonus * 0.7;
+                                      }
+                                      tempParticipants.forEach(op => {
+                                        const obm = op.name.match(/^(.+?)\s*\((.+?)\)$/);
+                                        const oapplicant = obm ? obm[2].trim() : (!op.willApply ? op.actualApplicantName : '');
+                                        const pName = bm ? bm[1].trim() : p.name;
+                                        if (oapplicant === pName && op.gotAllocation) {
+                                          const osp = Number(op.sellingPrice || 0);
+                                          const ola = Number(op.lotsAllocated || 0);
+                                          let ofee = Number(op.sellingFee || 0);
+                                          if (ofee === 0 && ola > 0 && osp > 0) {
+                                            const oamt = ola * lotSize * osp;
+                                            ofee = Math.max(oamt * 0.001, 8) + oamt * 0.0003 + Math.max(Math.ceil(oamt / 1000), 1);
+                                          }
+                                          const onet = ola * (osp - ipoPrice) * lotSize - ofee;
+                                          fairShare += onet * 0.4 * 0.3;
+                                        }
+                                      });
+                                    }
+
+                                    const tierIn = tempTransfers.filter(t => t.to === p.id).reduce((s, t) => s + Number(t.amount || 0), 0);
+                                    const tierOut = tempTransfers.filter(t => t.from === p.id).reduce((s, t) => s + Number(t.amount || 0), 0);
+                                    const finalAmt = fairShare + tierIn - tierOut;
+                                    const roi = Number(p.initialCapital || 0) > 0 ? (finalAmt / Number(p.initialCapital)) * 100 : 0;
+
+                                    return (
+                                      <tr key={pIdx} className={`border-b last:border-0 hover:bg-gray-50 ${p.gotAllocation ? 'bg-green-50/30' : ''}`}>
+                                        <td className="px-5 py-3">
+                                          <div className="font-semibold text-gray-800">{p.name}</div>
+                                          {processedP.actualApplicantName && (
+                                            <div className="text-xs text-gray-400">applied by {processedP.actualApplicantName}</div>
+                                          )}
+                                        </td>
+                                        <td className="px-4 py-3 text-right text-gray-600">RM {Number(p.initialCapital || 0).toLocaleString()}</td>
+                                        <td className="px-4 py-3 text-right text-gray-500">{capPct.toFixed(1)}%</td>
+                                        <td className="px-4 py-3 text-center">
+                                          {p.gotAllocation
+                                            ? <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 text-xs font-medium px-2.5 py-1 rounded-full">✓ {la} lots @ RM{sp}</span>
+                                            : <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-400 text-xs px-2.5 py-1 rounded-full">No luck</span>
+                                          }
+                                        </td>
+                                        <td className={`px-4 py-3 text-right font-semibold ${p.gotAllocation && netProfit > 0 ? 'text-green-600' : p.gotAllocation && netProfit < 0 ? 'text-red-600' : 'text-gray-300'}`}>
+                                          {p.gotAllocation ? `RM ${netProfit.toFixed(2)}` : '—'}
+                                        </td>
+                                        <td className={`px-4 py-3 text-right font-bold ${fairShare > 0 ? 'text-indigo-600' : fairShare < 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                                          {totalProfit !== 0 ? `RM ${fairShare.toFixed(2)}` : '—'}
+                                        </td>
+                                        <td className={`px-5 py-3 text-right font-semibold text-sm ${roi > 0 ? 'text-green-600' : roi < 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                                          {totalProfit !== 0 && Number(p.initialCapital) > 0 ? `${roi.toFixed(1)}%` : '—'}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                                {totalProfit !== 0 && (
+                                  <tfoot>
+                                    <tr className="bg-gray-50 border-t-2 border-gray-200 text-sm font-semibold">
+                                      <td className="px-5 py-3 text-gray-700">Total</td>
+                                      <td className="px-4 py-3 text-right text-gray-700">RM {totalCapital.toLocaleString()}</td>
+                                      <td className="px-4 py-3 text-right text-gray-500">100%</td>
+                                      <td className="px-4 py-3 text-center text-gray-500">{allocated.length} got allocation</td>
+                                      <td className="px-4 py-3 text-right text-green-600">RM {totalProfit.toFixed(2)}</td>
+                                      <td className="px-4 py-3 text-right text-indigo-600">RM {totalProfit.toFixed(2)}</td>
+                                      <td className="px-5 py-3 text-right text-green-600">
+                                        {totalCapital > 0 ? `${((totalProfit / totalCapital) * 100).toFixed(1)}%` : '—'}
+                                      </td>
+                                    </tr>
+                                  </tfoot>
+                                )}
+                              </table>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                    );
+                  } catch (error) {
+                    console.error('Error rendering summary tab:', error);
+                    return (
+                      <div className="text-center py-12">
+                        <AlertCircle className="w-16 h-16 text-red-400 mx-auto mb-4" />
+                        <h3 className="text-xl font-semibold text-gray-700 mb-2">
+                          Error Loading Summary
+                        </h3>
+                        <p className="text-gray-500 mb-4">
+                          {error.message || 'An error occurred while calculating the summary. Please try refreshing the page.'}
+                        </p>
+                        <button
+                          onClick={() => window.location.reload()}
+                          className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition-colors font-semibold"
+                        >
+                          Refresh Page
+                        </button>
+                      </div>
+                    );
+                  }
+                })()}
+              </div>
+            )}
+
             {activeTab === "ipo" && (
               <div>
                 <h2 className="text-xl font-bold text-gray-800 mb-4">
@@ -1051,7 +2200,8 @@ export default function IPOPoolManager() {
                       </p>
                       <p>
                         3. If participant won't apply, uncheck "Will Apply" and
-                        enter who will apply for them in "Actual Applicant" field
+                        enter who will apply for them in "Actual Applicant"
+                        field
                       </p>
                       <p>
                         4. Enter lots applied manually OR click "Max" button to
@@ -1062,8 +2212,7 @@ export default function IPOPoolManager() {
                         enter lots allocated
                       </p>
                       <p>
-                        6. After selling: Enter each person's selling price and
-                        selling fee (brokerage charges)
+                        6. After selling: Enter selling price - <strong className="text-green-700">Selling fee auto-calculates using M+ rates!</strong>
                       </p>
                       <p>
                         7. Net Profit auto-calculates: Gross Profit - Selling
@@ -1072,6 +2221,9 @@ export default function IPOPoolManager() {
                       <p className="mt-2 text-xs bg-blue-100 p-2 rounded">
                         💡 <strong>Max Button:</strong> Calculates maximum lots
                         based on: Initial Capital ÷ (IPO Price × Lot Size)
+                      </p>
+                      <p className="mt-2 text-xs bg-green-100 p-2 rounded">
+                        💰 <strong>M+ Selling Fee (Auto):</strong> Brokerage 0.1% (min RM8) + Clearing 0.03% + Stamp Duty RM1/RM1000 (min RM1)
                       </p>
                     </div>
                   </div>
@@ -1115,7 +2267,10 @@ export default function IPOPoolManager() {
                           Selling Price (per share)
                         </th>
                         <th className="border px-3 py-2 text-right font-semibold">
-                          Selling Fee (RM)
+                          <div className="flex flex-col">
+                            <span>Selling Fee (RM)</span>
+                            <span className="text-xs font-normal text-green-600">Auto M+</span>
+                          </div>
                         </th>
                         <th className="border px-3 py-2 text-right font-semibold">
                           Net Profit/Loss
@@ -1190,7 +2345,9 @@ export default function IPOPoolManager() {
                                 }
                                 disabled={p.willApply}
                                 placeholder={
-                                  p.willApply ? "This person applies" : "Enter who will apply"
+                                  p.willApply
+                                    ? "This person applies"
+                                    : "Enter who will apply"
                                 }
                                 className="w-32 px-2 py-1 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
                               />
@@ -1247,7 +2404,7 @@ export default function IPOPoolManager() {
                                 type="number"
                                 value={p.lotsAllocated}
                                 onChange={(e) =>
-                                  updateParticipant(
+                                  updateParticipantWithAutoFee(
                                     p.id,
                                     "lotsAllocated",
                                     e.target.value
@@ -1266,7 +2423,7 @@ export default function IPOPoolManager() {
                                 step="0.01"
                                 value={p.sellingPrice}
                                 onChange={(e) =>
-                                  updateParticipant(
+                                  updateParticipantWithAutoFee(
                                     p.id,
                                     "sellingPrice",
                                     e.target.value
@@ -1278,21 +2435,28 @@ export default function IPOPoolManager() {
                               />
                             </td>
                             <td className="border px-3 py-2">
-                              <input
-                                type="number"
-                                step="0.01"
-                                value={p.sellingFee}
-                                onChange={(e) =>
-                                  updateParticipant(
-                                    p.id,
-                                    "sellingFee",
-                                    e.target.value
-                                  )
-                                }
-                                disabled={!p.gotAllocation}
-                                className="w-20 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
-                                placeholder="0.00"
-                              />
+                              <div className="flex flex-col gap-1">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={p.sellingFee}
+                                  onChange={(e) =>
+                                    updateParticipant(
+                                      p.id,
+                                      "sellingFee",
+                                      e.target.value
+                                    )
+                                  }
+                                  disabled={!p.gotAllocation}
+                                  className="w-20 px-2 py-1 border rounded text-right focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100"
+                                  placeholder="0.00"
+                                />
+                                {p.gotAllocation && Number(p.lotsAllocated) > 0 && Number(p.sellingPrice) > 0 && (
+                                  <span className="text-xs text-green-600 text-center">
+                                    Auto M+
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td
                               className={`border px-3 py-2 text-right font-semibold ${
@@ -1445,18 +2609,42 @@ export default function IPOPoolManager() {
             {activeTab === "results" && (
               <div>
                 {!canShowDistribution ? (
-                  <div className="text-center py-12">
-                    <AlertCircle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                    <h3 className="text-xl font-semibold text-gray-700 mb-2">
-                      Distribution Not Available Yet
+                  <div className="text-center py-16">
+                    <AlertCircle className="w-14 h-14 text-gray-300 mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold text-gray-600 mb-2">
+                      {!ipoDetails.name ? "No project loaded" : "Distribution not ready yet"}
                     </h3>
-                    <p className="text-gray-500 mb-4">
-                      {!hasAllocationData &&
-                        "Mark who got allocation in Participants tab first."}
-                      {hasAllocationData &&
-                        !hasSellingPrice &&
-                        "Enter selling prices for participants who got allocation in Participants tab."}
+                    <p className="text-gray-400 text-sm mb-6 max-w-sm mx-auto">
+                      {!ipoDetails.name
+                        ? "This tab shows distribution for a single loaded project. To see all IPOs together, use the Summary or Settlements tabs."
+                        : !hasAllocationData
+                        ? "Mark who got allocation in the Participants tab first."
+                        : "Enter selling prices for participants who got allocation."}
                     </p>
+                    <div className="flex gap-3 justify-center flex-wrap">
+                      {!ipoDetails.name && (
+                        <>
+                          <button
+                            onClick={() => setActiveTab("summary")}
+                            className="bg-purple-600 text-white px-5 py-2.5 rounded-lg hover:bg-purple-700 transition-colors font-medium text-sm"
+                          >
+                            All IPOs Summary
+                          </button>
+                          <button
+                            onClick={() => setActiveTab("settlements")}
+                            className="bg-yellow-500 text-white px-5 py-2.5 rounded-lg hover:bg-yellow-600 transition-colors font-medium text-sm"
+                          >
+                            💸 Settlements
+                          </button>
+                          <button
+                            onClick={() => setShowProjectList(true)}
+                            className="bg-gray-200 text-gray-700 px-5 py-2.5 rounded-lg hover:bg-gray-300 transition-colors font-medium text-sm"
+                          >
+                            Load Single Project
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -1638,13 +2826,25 @@ export default function IPOPoolManager() {
                               Status
                             </th>
                             <th className="border px-3 py-2 text-right font-semibold">
+                              Lots Allocated
+                            </th>
+                            <th className="border px-3 py-2 text-right font-semibold">
+                              Capital Used
+                            </th>
+                            <th className="border px-3 py-2 text-right font-semibold">
                               Selling Price
+                            </th>
+                            <th className="border px-3 py-2 text-right font-semibold">
+                              Sold Amount
+                            </th>
+                            <th className="border px-3 py-2 text-right font-semibold">
+                              Gross Profit
                             </th>
                             <th className="border px-3 py-2 text-right font-semibold">
                               Selling Fee
                             </th>
                             <th className="border px-3 py-2 text-right font-semibold">
-                              Actual Profit Received
+                              Net Profit
                             </th>
                             <th className="border px-3 py-2 text-left font-semibold">
                               Formula Breakdown
@@ -1719,6 +2919,16 @@ export default function IPOPoolManager() {
                                 ? (p.netPosition / p.capitalUsedToApply) * 100
                                 : 0;
 
+                            // Calculate detailed breakdown
+                            const lotsAllocated = Number(p.lotsAllocated || 0);
+                            const ipoPrice = Number(ipoDetails.ipoPrice || 0);
+                            const lotSize = Number(ipoDetails.lotSize || 100);
+                            const sellingPrice = Number(p.sellingPrice || 0);
+
+                            const capitalUsed = lotsAllocated * ipoPrice * lotSize;
+                            const soldAmount = lotsAllocated * sellingPrice * lotSize;
+                            const grossProfit = soldAmount - capitalUsed;
+
                             return (
                               <tr key={p.id} className="hover:bg-gray-50">
                                 <td className="border px-3 py-2 font-medium">
@@ -1747,9 +2957,40 @@ export default function IPOPoolManager() {
                                     </span>
                                   )}
                                 </td>
+                                <td className="border px-3 py-2 text-right font-medium text-purple-600">
+                                  {p.gotAllocation && lotsAllocated > 0
+                                    ? `${lotsAllocated} lots`
+                                    : "-"}
+                                </td>
+                                <td className="border px-3 py-2 text-right text-orange-600 font-semibold">
+                                  {p.gotAllocation && capitalUsed > 0
+                                    ? `RM ${capitalUsed.toLocaleString(undefined, {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2
+                                      })}`
+                                    : "-"}
+                                </td>
                                 <td className="border px-3 py-2 text-right text-blue-600 font-medium">
                                   {p.gotAllocation && Number(p.sellingPrice) > 0
                                     ? `RM ${Number(p.sellingPrice).toFixed(2)}`
+                                    : "-"}
+                                </td>
+                                <td className="border px-3 py-2 text-right text-blue-600 font-semibold">
+                                  {p.gotAllocation && soldAmount > 0
+                                    ? `RM ${soldAmount.toLocaleString(undefined, {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2
+                                      })}`
+                                    : "-"}
+                                </td>
+                                <td className={`border px-3 py-2 text-right font-semibold ${
+                                  grossProfit >= 0 ? 'text-green-600' : 'text-red-600'
+                                }`}>
+                                  {p.gotAllocation
+                                    ? `RM ${grossProfit.toLocaleString(undefined, {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2
+                                      })}`
                                     : "-"}
                                 </td>
                                 <td className="border px-3 py-2 text-right text-red-600 text-xs">
@@ -1757,7 +2998,9 @@ export default function IPOPoolManager() {
                                     ? `-RM ${Number(p.sellingFee).toFixed(2)}`
                                     : "-"}
                                 </td>
-                                <td className="border px-3 py-2 text-right font-semibold text-blue-600">
+                                <td className={`border px-3 py-2 text-right font-bold ${
+                                  p.actualProfitReceived >= 0 ? 'text-green-700' : 'text-red-700'
+                                }`}>
                                   {p.gotAllocation
                                     ? `RM ${p.actualProfitReceived.toFixed(2)}`
                                     : "-"}
@@ -1842,7 +3085,60 @@ export default function IPOPoolManager() {
                               100%
                             </td>
                             <td className="border px-3 py-2"></td>
+                            <td className="border px-3 py-2 text-right text-purple-600">
+                              {distribution
+                                .filter(p => p.gotAllocation)
+                                .reduce((sum, p) => sum + Number(p.lotsAllocated || 0), 0)} lots
+                            </td>
+                            <td className="border px-3 py-2 text-right text-orange-600">
+                              RM{" "}
+                              {distribution
+                                .filter(p => p.gotAllocation)
+                                .reduce((sum, p) => {
+                                  const lots = Number(p.lotsAllocated || 0);
+                                  const price = Number(ipoDetails.ipoPrice || 0);
+                                  const lotSize = Number(ipoDetails.lotSize || 100);
+                                  return sum + (lots * price * lotSize);
+                                }, 0)
+                                .toLocaleString(undefined, {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2
+                                })}
+                            </td>
                             <td className="border px-3 py-2"></td>
+                            <td className="border px-3 py-2 text-right text-blue-600">
+                              RM{" "}
+                              {distribution
+                                .filter(p => p.gotAllocation)
+                                .reduce((sum, p) => {
+                                  const lots = Number(p.lotsAllocated || 0);
+                                  const sellingPrice = Number(p.sellingPrice || 0);
+                                  const lotSize = Number(ipoDetails.lotSize || 100);
+                                  return sum + (lots * sellingPrice * lotSize);
+                                }, 0)
+                                .toLocaleString(undefined, {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2
+                                })}
+                            </td>
+                            <td className="border px-3 py-2 text-right text-green-600">
+                              RM{" "}
+                              {distribution
+                                .filter(p => p.gotAllocation)
+                                .reduce((sum, p) => {
+                                  const lots = Number(p.lotsAllocated || 0);
+                                  const ipoPrice = Number(ipoDetails.ipoPrice || 0);
+                                  const sellingPrice = Number(p.sellingPrice || 0);
+                                  const lotSize = Number(ipoDetails.lotSize || 100);
+                                  const capitalUsed = lots * ipoPrice * lotSize;
+                                  const soldAmount = lots * sellingPrice * lotSize;
+                                  return sum + (soldAmount - capitalUsed);
+                                }, 0)
+                                .toLocaleString(undefined, {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2
+                                })}
+                            </td>
                             <td className="border px-3 py-2 text-right text-red-600 text-xs">
                               -RM{" "}
                               {distribution
@@ -1852,7 +3148,7 @@ export default function IPOPoolManager() {
                                 )
                                 .toFixed(2)}
                             </td>
-                            <td className="border px-3 py-2 text-right text-blue-600">
+                            <td className="border px-3 py-2 text-right text-green-700 font-bold">
                               RM{" "}
                               {distribution
                                 .reduce(
@@ -2088,6 +3384,178 @@ export default function IPOPoolManager() {
                     </div>
                   </>
                 )}
+              </div>
+            )}
+
+            {activeTab === "settlements" && (
+              <div>
+                <h2 className="text-2xl font-bold text-gray-800 mb-2">💸 Final Settlements</h2>
+                <p className="text-gray-500 text-sm mb-6">
+                  Across all {savedProjects.length} IPOs. Members who sold allocated shares hold the cash and pay out to the rest, so everyone ends with their fair share.
+                </p>
+
+                {!savedProjects || savedProjects.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400">No projects yet.</div>
+                ) : (() => {
+                  const people = computeMemberTotals();
+
+                  const creditors = people
+                    .filter(p => p.settleBalance > 0.01)
+                    .sort((a, b) => b.settleBalance - a.settleBalance);
+                  const debtors = people
+                    .filter(p => p.settleBalance < -0.01)
+                    .sort((a, b) => a.settleBalance - b.settleBalance);
+
+                  const creditorsCopy = creditors.map(c => ({ ...c, remaining: c.settleBalance }));
+                  const debtorsCopy = debtors.map(d => ({ ...d, remaining: Math.abs(d.settleBalance) }));
+                  const settlements = [];
+                  let i = 0, j = 0;
+                  while (i < creditorsCopy.length && j < debtorsCopy.length) {
+                    const creditor = creditorsCopy[i];
+                    const debtor = debtorsCopy[j];
+                    const amount = Math.min(creditor.remaining, debtor.remaining);
+                    if (amount > 0.01) settlements.push({ from: debtor.name, to: creditor.name, amount });
+                    creditor.remaining -= amount;
+                    debtor.remaining -= amount;
+                    if (creditor.remaining < 0.01) i++;
+                    if (debtor.remaining < 0.01) j++;
+                  }
+
+                  return (
+                    <>
+                      {/* Net position cards */}
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-8">
+                        {people
+                          .slice()
+                          .sort((a, b) => b.settleBalance - a.settleBalance)
+                          .map(p => (
+                            <div
+                              key={p.name}
+                              className={`rounded-xl p-4 text-center border-2 ${
+                                p.settleBalance > 0.01
+                                  ? "bg-green-50 border-green-400"
+                                  : p.settleBalance < -0.01
+                                  ? "bg-red-50 border-red-400"
+                                  : "bg-gray-50 border-gray-300"
+                              }`}
+                            >
+                              <div className="font-bold text-gray-800 text-lg mb-1">{p.name}</div>
+                              <div className={`text-2xl font-extrabold ${
+                                p.settleBalance > 0.01 ? "text-green-600"
+                                  : p.settleBalance < -0.01 ? "text-red-600"
+                                  : "text-gray-500"
+                              }`}>
+                                {p.settleBalance > 0.01 ? "+" : ""}RM {p.settleBalance.toFixed(2)}
+                              </div>
+                              <div className={`text-xs mt-1 font-medium ${
+                                p.settleBalance > 0.01 ? "text-green-500"
+                                  : p.settleBalance < -0.01 ? "text-red-500"
+                                  : "text-gray-400"
+                              }`}>
+                                {p.settleBalance > 0.01 ? "will receive"
+                                  : p.settleBalance < -0.01 ? "needs to pay"
+                                  : "settled"}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+
+                      {/* Transfer instructions */}
+                      <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-400 rounded-xl p-6 mb-6">
+                        <h3 className="text-xl font-bold text-yellow-900 mb-1">
+                          Transfer Instructions
+                        </h3>
+                        <p className="text-sm text-yellow-700 mb-5">
+                          {settlements.length === 0
+                            ? "All accounts are already settled — no transfers needed."
+                            : `${settlements.length} transfer${settlements.length > 1 ? "s" : ""} needed to close all ${savedProjects.length} IPOs`}
+                        </p>
+
+                        <div className="space-y-3">
+                          {settlements.length === 0 ? (
+                            <div className="text-center py-6 text-green-600 font-semibold text-lg">
+                              ✅ Nothing to settle!
+                            </div>
+                          ) : settlements.map((s, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-center gap-4 bg-white rounded-xl px-5 py-4 shadow-sm border border-yellow-200"
+                            >
+                              <div className="w-8 h-8 rounded-full bg-yellow-400 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                                {idx + 1}
+                              </div>
+                              <div className="flex-1 flex items-center gap-2 flex-wrap">
+                                <span className="font-bold text-red-700 text-lg">{s.from}</span>
+                                <span className="text-gray-400 text-sm">pays</span>
+                                <span className="font-bold text-green-700 text-lg">{s.to}</span>
+                              </div>
+                              <div className="text-2xl font-extrabold text-indigo-700 bg-indigo-50 px-5 py-2 rounded-lg border border-indigo-200">
+                                RM {s.amount.toFixed(2)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Per-person breakdown */}
+                      <div className="bg-white border rounded-xl overflow-hidden">
+                        <div className="bg-gray-100 px-5 py-3 border-b">
+                          <h3 className="font-bold text-gray-800">Per-Person Breakdown (All {savedProjects.length} IPOs)</h3>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-gray-50 border-b">
+                                <th className="text-left px-4 py-3 font-semibold text-gray-700">Name</th>
+                                <th className="text-right px-4 py-3 font-semibold text-gray-700">Total Capital</th>
+                                <th className="text-right px-4 py-3 font-semibold text-gray-700">Cash Pocketed</th>
+                                <th className="text-right px-4 py-3 font-semibold text-gray-700">Fair Share</th>
+                                <th className="text-right px-4 py-3 font-semibold text-gray-700">Balance</th>
+                                <th className="text-right px-4 py-3 font-semibold text-gray-700">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {people
+                                .slice()
+                                .sort((a, b) => b.settleBalance - a.settleBalance)
+                                .map((p, idx) => {
+                                  const action = p.settleBalance > 0.01
+                                    ? { label: `Receive RM ${p.settleBalance.toFixed(2)}`, color: "text-green-600 bg-green-50" }
+                                    : p.settleBalance < -0.01
+                                    ? { label: `Pay RM ${Math.abs(p.settleBalance).toFixed(2)}`, color: "text-red-600 bg-red-50" }
+                                    : { label: "Settled ✓", color: "text-gray-500 bg-gray-50" };
+                                  return (
+                                    <tr key={idx} className="border-b hover:bg-gray-50">
+                                      <td className="px-4 py-3 font-semibold text-gray-800">{p.name}</td>
+                                      <td className="px-4 py-3 text-right text-gray-600">RM {p.totalCapitalContributed.toLocaleString()}</td>
+                                      <td className="px-4 py-3 text-right text-blue-600 font-medium">
+                                        {p.totalProfit > 0 ? `RM ${p.totalProfit.toFixed(2)}` : "—"}
+                                      </td>
+                                      <td className="px-4 py-3 text-right text-indigo-600 font-medium">
+                                        RM {p.totalProfitShare.toFixed(2)}
+                                      </td>
+                                      <td className={`px-4 py-3 text-right font-bold text-base ${
+                                        p.settleBalance > 0.01 ? "text-green-600"
+                                          : p.settleBalance < -0.01 ? "text-red-600"
+                                          : "text-gray-400"
+                                      }`}>
+                                        {p.settleBalance > 0 ? "+" : ""}RM {p.settleBalance.toFixed(2)}
+                                      </td>
+                                      <td className="px-4 py-3 text-right">
+                                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${action.color}`}>
+                                          {action.label}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             )}
           </div>
