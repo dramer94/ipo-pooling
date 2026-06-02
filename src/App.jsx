@@ -1113,7 +1113,10 @@ export default function IPOPoolManager() {
               ? m.cap / totalCap
               : 0;
           rec.totalProfitShare += weight * totalProfit * 0.6;
-          if (m.got && m.net > 0) {
+          // 40% luck component applies to the allocation winner — symmetric for
+          // gains AND losses (a losing allocation bears 40% of its own loss), so
+          // the books always balance.
+          if (m.got) {
             const bonus = m.net * 0.4;
             if (m.applicant) {
               rec.totalProfitShare += bonus * 0.7;
@@ -1647,9 +1650,8 @@ You can paste multiple IPOs at once!`}
                               <th className="text-right px-4 py-3 font-medium">Total Capital</th>
                               <th className="text-right px-4 py-3 font-medium">Cap %</th>
                               <th className="text-center px-4 py-3 font-medium">IPOs / Won</th>
-                              <th className="text-right px-4 py-3 font-medium">Actual Profit</th>
-                              <th className="text-right px-4 py-3 font-medium">Fair Share</th>
-                              <th className="text-right px-5 py-3 font-medium">Net Position</th>
+                              <th className="text-right px-4 py-3 font-medium">Cash Pocketed</th>
+                              <th className="text-right px-5 py-3 font-medium">Total Profit</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1668,14 +1670,11 @@ You can paste multiple IPOs at once!`}
                                       <td className="px-4 py-3 text-center text-gray-500">
                                         {p.ipoCount} / <span className="text-green-600 font-medium">{p.allocationCount}</span>
                                       </td>
-                                      <td className="px-4 py-3 text-right text-blue-600 font-medium">
+                                      <td className="px-4 py-3 text-right text-gray-500">
                                         {p.totalProfit > 0 ? `RM ${p.totalProfit.toFixed(2)}` : "—"}
                                       </td>
-                                      <td className="px-4 py-3 text-right text-indigo-600 font-medium">
-                                        RM {p.totalProfitShare.toFixed(2)}
-                                      </td>
-                                      <td className={`px-5 py-3 text-right font-bold ${p.totalNetPosition >= 0 ? "text-green-600" : "text-red-600"}`}>
-                                        {p.totalNetPosition >= 0 ? "+" : ""}RM {p.totalNetPosition.toFixed(2)}
+                                      <td className={`px-5 py-3 text-right font-bold text-base ${p.totalProfitShare >= 0 ? "text-green-600" : "text-red-600"}`}>
+                                        {p.totalProfitShare >= 0 ? "+" : ""}RM {p.totalProfitShare.toFixed(2)}
                                       </td>
                                     </tr>
                                   );
@@ -1690,14 +1689,11 @@ You can paste multiple IPOs at once!`}
                               </td>
                               <td className="px-4 py-3 text-right text-gray-500">100%</td>
                               <td className="px-4 py-3"></td>
-                              <td className="px-4 py-3 text-right text-blue-600">
+                              <td className="px-4 py-3 text-right text-gray-500">
                                 RM {summaryData.reduce((s, p) => s + (p.totalProfit || 0), 0).toFixed(2)}
                               </td>
-                              <td className="px-4 py-3 text-right text-indigo-600">
+                              <td className="px-5 py-3 text-right text-green-600 font-bold text-base">
                                 RM {summaryData.reduce((s, p) => s + (p.totalProfitShare || 0), 0).toFixed(2)}
-                              </td>
-                              <td className="px-5 py-3 text-right text-green-600">
-                                RM {summaryData.reduce((s, p) => s + (p.totalNetPosition || 0), 0).toFixed(2)}
                               </td>
                             </tr>
                           </tfoot>
@@ -1787,7 +1783,7 @@ You can paste multiple IPOs at once!`}
                                     if (totalProfit !== 0) {
                                       const weight = totalCapUsed > 0 ? capUsed / totalCapUsed : 0;
                                       fairShare = weight * totalProfit * 0.6;
-                                      if (p.gotAllocation && netProfit > 0) {
+                                      if (p.gotAllocation) {
                                         const bonus = netProfit * 0.4;
                                         fairShare += processedP.willApply !== false ? bonus : bonus * 0.7;
                                       }

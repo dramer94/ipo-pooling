@@ -73,7 +73,7 @@ Each row in `ipo_projects` has this structure:
 - `sellingFee`: leave as 0 — the website auto-calculates M+ brokerage fees
 - `transfers`: usually empty array `[]` unless there are tier-matching transfers between participants
 
-> **CRITICAL — the "Sab" / applicant rule:** Some people (e.g. **Sab**) only ever lend their CDS account to apply — they NEVER provide capital. Whenever a name is used purely as an applicant, it must go in `actualApplicantName`, and the `name` field must be the real capital provider. So **"Sab (Fairuz)" and "Fairuz (Sab)" mean the SAME thing**: Fairuz's capital, Sab's account → `{name:"Fairuz", willApply:false, actualApplicantName:"Sab"}`. Never store an applicant-only person in the `name` field, and never give them `initialCapital`.
+> **CRITICAL — the "Sab" / applicant rule:** When **Sab** appears in bracket notation, she is only lending her CDS account to apply — the capital belongs to the other person. So **"Sab (Fairuz)" and "Fairuz (Sab)" mean the SAME thing**: Fairuz's capital, Sab's account → `{name:"Fairuz", willApply:false, actualApplicantName:"Sab"}`. Put the applicant in `actualApplicantName`, the capital provider in `name`. (Rare exception: if Sab is listed as her own standalone line with her own capital + lots — e.g. PMW International — then she's a normal contributor; store her in `name` with that `initialCapital`.)
 
 ---
 
@@ -86,7 +86,7 @@ Each row in `ipo_projects` has this structure:
 | Fairuz | Capital provider + applies via own CDS | — |
 | Saddiq | Capital provider; sometimes applies via own CDS, sometimes via Sab's account | When Sab applies for him: `name:"Saddiq", willApply:false, actualApplicantName:"Sab"` |
 | Amer | Capital provider + applies via own CDS | That's me (the owner) |
-| **Sab** | **Applicant ONLY — never provides capital** | Only lends her account to apply for others. Always goes in `actualApplicantName`, never in `name`, never has `initialCapital`. |
+| **Sab** | **Almost always applicant-only** | When in bracket notation (`X (Sab)` / `Sab (X)`) she's just lending her account → goes in `actualApplicantName`, no capital. Exception: occasionally she contributes her own money as a normal standalone row with her own capital + lots (e.g. PMW International). Only give Sab `initialCapital` when she's listed as her own standalone line. |
 
 > A person may appear **multiple times in one IPO** because they applied through several CDS accounts (their own + others') to get more ballot entries. This is legitimate — keep all rows; the website sums them per person.
 
@@ -116,6 +116,9 @@ The person who got allocation keeps **40% of their own actual profit** as a luck
 ```
 Your Share = Capital Share + Allocation Luck Bonus (if applicable)
 ```
+
+### Losses work the same way (60/40)
+If an IPO loses money (shares sold at/below IPO price, or wiped out by M+ fees), the **same 60/40 split applies to the loss**: 60% shared by capital used, and the allocation holder bears 40% of their own loss (70/30 if applied via another account). This keeps the books balanced. So far 4 IPOs have been net losses (Aquawalk, Geohan, PMW, LAC Med).
 
 ### M+ Selling Fee (auto-calculated by website)
 ```
