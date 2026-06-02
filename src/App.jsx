@@ -55,6 +55,8 @@ export default function IPOPoolManager() {
   const [isOnline, setIsOnline] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [expandedRows, setExpandedRows] = useState({});
+  const [expandedIpos, setExpandedIpos] = useState({});
+  const [ipoSearch, setIpoSearch] = useState("");
 
   // Import feature states
   const [showImportModal, setShowImportModal] = useState(false);
@@ -1702,10 +1704,38 @@ You can paste multiple IPOs at once!`}
                     </div>
 
                     <div className="mt-6">
-                      <h3 className="font-bold text-gray-800 text-xl mb-4">📋 Per-IPO Breakdown</h3>
-                      <div className="space-y-4">
+                      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                        <h3 className="font-bold text-gray-800 text-xl">📋 Per-IPO Breakdown</h3>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <input
+                            type="text"
+                            value={ipoSearch}
+                            onChange={(e) => setIpoSearch(e.target.value)}
+                            placeholder="Search IPO…"
+                            className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none w-40"
+                          />
+                          <button
+                            onClick={() => {
+                              const all = {};
+                              savedProjects.forEach((p, i) => { all[p.id || i] = true; });
+                              setExpandedIpos(all);
+                            }}
+                            className="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-200 transition-colors"
+                          >
+                            Expand all
+                          </button>
+                          <button
+                            onClick={() => setExpandedIpos({})}
+                            className="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-200 transition-colors"
+                          >
+                            Collapse all
+                          </button>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
                         {savedProjects
                           .filter(p => p && p.ipoDetails && p.ipoDetails.name && p.ipoDetails.ipoPrice)
+                          .filter(p => !ipoSearch.trim() || p.ipoDetails.name.toLowerCase().includes(ipoSearch.trim().toLowerCase()))
                           .map((project, projectIdx) => {
                           const tempIpoDetails = project.ipoDetails;
                           const tempParticipants = project.participants || [];
@@ -1728,29 +1758,40 @@ You can paste multiple IPOs at once!`}
 
                           const allocated = tempParticipants.filter(p => p.gotAllocation);
                           const pending = totalProfit === 0 && allocated.length > 0;
+                          const winners = [...new Set(allocated.map(p => p.name.replace(/\s*\(.+?\)$/, '').trim()))];
+                          const ipoKey = project.id || projectIdx;
+                          const isOpen = !!expandedIpos[ipoKey];
+                          const toggleIpo = () => setExpandedIpos(prev => ({ ...prev, [ipoKey]: !prev[ipoKey] }));
 
                           return (
                             <div key={projectIdx} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                              {/* IPO Header */}
-                              <div className="flex items-center justify-between px-5 py-4 bg-gray-50 border-b border-gray-200">
-                                <div>
-                                  <h4 className="font-bold text-gray-900 text-base">{tempIpoDetails.name}</h4>
-                                  <div className="flex gap-4 text-xs text-gray-500 mt-1">
-                                    <span>{tempIpoDetails.applicationDate || '—'}</span>
-                                    <span>RM{ipoPrice} / share</span>
-                                    <span>Pool: RM {totalCapital.toLocaleString()}</span>
+                              {/* IPO Header (click to expand) */}
+                              <button
+                                onClick={toggleIpo}
+                                className="w-full flex items-center justify-between px-5 py-3.5 bg-gray-50 hover:bg-gray-100 transition-colors text-left"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <span className="text-gray-400 text-sm flex-shrink-0">{isOpen ? '▼' : '▶'}</span>
+                                  <div className="min-w-0">
+                                    <h4 className="font-bold text-gray-900 text-sm truncate">{tempIpoDetails.name}</h4>
+                                    <div className="flex gap-3 text-xs text-gray-500 mt-0.5 flex-wrap">
+                                      <span>{tempIpoDetails.applicationDate || '—'}</span>
+                                      <span>RM{ipoPrice}/share</span>
+                                      <span className="text-green-600">{winners.length ? `🏆 ${winners.join(', ')}` : 'no allocation'}</span>
+                                    </div>
                                   </div>
                                 </div>
-                                <div className={`text-right px-4 py-2 rounded-lg ${totalProfit > 0 ? 'bg-green-50' : totalProfit < 0 ? 'bg-red-50' : 'bg-gray-100'}`}>
-                                  <div className="text-xs text-gray-500 mb-0.5">Total Profit</div>
-                                  <div className={`font-bold text-lg ${totalProfit > 0 ? 'text-green-600' : totalProfit < 0 ? 'text-red-600' : 'text-gray-400'}`}>
-                                    {totalProfit !== 0 ? `RM ${totalProfit.toFixed(2)}` : pending ? 'Pending sell' : '—'}
+                                <div className="text-right flex-shrink-0 ml-3">
+                                  <div className={`font-bold text-base ${totalProfit > 0 ? 'text-green-600' : totalProfit < 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                                    {totalProfit !== 0 ? `RM ${totalProfit.toFixed(2)}` : pending ? 'Pending' : '—'}
                                   </div>
+                                  <div className="text-xs text-gray-400">{totalProfit !== 0 ? 'profit' : ''}</div>
                                 </div>
-                              </div>
+                              </button>
 
                               {/* Participants table */}
-                              <table className="w-full text-sm">
+                              {isOpen && (
+                              <table className="w-full text-sm border-t border-gray-200">
                                 <thead>
                                   <tr className="text-xs text-gray-500 border-b bg-gray-50">
                                     <th className="text-left px-5 py-2 font-medium">Name</th>
@@ -1855,6 +1896,7 @@ You can paste multiple IPOs at once!`}
                                   </tfoot>
                                 )}
                               </table>
+                              )}
                             </div>
                           );
                         })}
