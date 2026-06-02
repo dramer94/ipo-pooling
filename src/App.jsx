@@ -58,6 +58,29 @@ export default function IPOPoolManager() {
   const [expandedIpos, setExpandedIpos] = useState({});
   const [ipoSearch, setIpoSearch] = useState("");
 
+  // Simple admin password gate (remembers on this device)
+  const ADMIN_PASSWORD = "admin123";
+  const [authed, setAuthed] = useState(
+    () => localStorage.getItem("ipo-admin-authed") === "true"
+  );
+  const [pwInput, setPwInput] = useState("");
+  const [pwError, setPwError] = useState(false);
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (pwInput === ADMIN_PASSWORD) {
+      localStorage.setItem("ipo-admin-authed", "true");
+      setAuthed(true);
+      setPwError(false);
+    } else {
+      setPwError(true);
+    }
+  };
+  const handleLogout = () => {
+    localStorage.removeItem("ipo-admin-authed");
+    setAuthed(false);
+    setPwInput("");
+  };
+
   // Import feature states
   const [showImportModal, setShowImportModal] = useState(false);
   const [importText, setImportText] = useState("");
@@ -1174,6 +1197,53 @@ export default function IPOPoolManager() {
   );
   const canShowDistribution = hasAllocationData && hasSellingPrice;
 
+  // Admin login gate — must enter password before seeing the app
+  if (!authed) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center p-4">
+        <form
+          onSubmit={handleLogin}
+          className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm"
+        >
+          <div className="flex items-center gap-3 mb-6">
+            <TrendingUp className="w-8 h-8 text-indigo-600" />
+            <div>
+              <h1 className="text-xl font-bold text-gray-800">IPO Pooling Fund</h1>
+              <p className="text-gray-500 text-sm">Admin access only</p>
+            </div>
+          </div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Password
+          </label>
+          <input
+            type="password"
+            value={pwInput}
+            onChange={(e) => {
+              setPwInput(e.target.value);
+              setPwError(false);
+            }}
+            autoFocus
+            placeholder="Enter admin password"
+            className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:outline-none ${
+              pwError
+                ? "border-red-400 focus:ring-red-400"
+                : "border-gray-300 focus:ring-indigo-500"
+            }`}
+          />
+          {pwError && (
+            <p className="text-red-600 text-sm mt-2">Wrong password — try again.</p>
+          )}
+          <button
+            type="submit"
+            className="w-full mt-5 bg-indigo-600 text-white py-2.5 rounded-lg font-semibold hover:bg-indigo-700 transition-colors"
+          >
+            Enter
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 p-4">
       <div className="max-w-7xl mx-auto">
@@ -1220,6 +1290,13 @@ export default function IPOPoolManager() {
               >
                 <FolderOpen className="w-5 h-5" />
                 Cloud Projects ({savedProjects.length}) {isOnline ? "🟢" : "🔴"}
+              </button>
+              <button
+                onClick={handleLogout}
+                title="Lock / log out"
+                className="flex items-center gap-2 bg-gray-200 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-300 transition-colors"
+              >
+                🔒
               </button>
             </div>
           </div>
