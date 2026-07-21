@@ -61,6 +61,7 @@ export default function IPOPoolManager() {
   const [completedSettlements, setCompletedSettlements] = useState([]);
   const [settlementSubTab, setSettlementSubTab] = useState("current");
   const [settlementsScope, setSettlementsScope] = useState("all");
+  const [selectedIpoForBreakdown, setSelectedIpoForBreakdown] = useState(null);
 
   // Real admin auth via Supabase (works with Row Level Security). Single
   // shared account; the login box only asks for the password, email is fixed.
@@ -432,6 +433,18 @@ export default function IPOPoolManager() {
   // rather than requiring a schema change or a new table.
   const SETTLEMENT_STATUS_ID = "00000000-0000-0000-0000-000000000001";
 
+  // Persist the payment ledger to the sentinel row.
+  const saveSettlementLedger = async (ledger) => {
+    const { error } = await supabase.from(IPO_PROJECTS_TABLE).upsert({
+      id: SETTLEMENT_STATUS_ID,
+      name: "__settlement_status__",
+      ipo_details: { completedSettlements: ledger },
+      participants: [],
+      transfers: [],
+    });
+    if (error) throw error;
+  };
+
   const loadSettlementStatus = async () => {
     try {
       const { data, error } = await supabase
@@ -440,7 +453,33 @@ export default function IPOPoolManager() {
         .eq("id", SETTLEMENT_STATUS_ID)
         .maybeSingle();
       if (error) throw error;
-      setCompletedSettlements(data?.ipo_details?.completedSettlements || []);
+      const raw = data?.ipo_details?.completedSettlements || [];
+
+      // Migrate the old "From-To-Amount" string-key format (a fragile design
+      // where marking a transfer done stopped working the moment amounts
+      // shifted from new IPO data) into a proper payment ledger. Names never
+      // contain hyphens, so the last "-" always separates the amount.
+      let migratedSomething = false;
+      const migrated = raw.map((r) => {
+        if (typeof r === "string") {
+          migratedSomething = true;
+          const idx = r.lastIndexOf("-");
+          const beforeAmount = r.slice(0, idx);
+          const sep = beforeAmount.indexOf("-");
+          return {
+            id: crypto.randomUUID(),
+            from: beforeAmount.slice(0, sep),
+            to: beforeAmount.slice(sep + 1),
+            amount: Number(r.slice(idx + 1)),
+          };
+        }
+        return r;
+      });
+
+      setCompletedSettlements(migrated);
+      if (migratedSomething) {
+        await saveSettlementLedger(migrated);
+      }
     } catch (error) {
       console.error("Error loading settlement status:", error);
     }
@@ -607,25 +646,31 @@ export default function IPOPoolManager() {
     );
   };
 
-  const toggleSettlementDone = async (settlementKey) => {
-    const updated = completedSettlements.includes(settlementKey)
-      ? completedSettlements.filter((k) => k !== settlementKey)
-      : [...completedSettlements, settlementKey];
+  // Records a real-world payment (from -> to, amount) into the ledger.
+  // Deliberately NOT keyed against a specific auto-computed instruction —
+  // that's what broke before, since the pairing/amounts shift whenever new
+  // IPO data changes the underlying balances. The ledger is netted against
+  // fresh balances on every render instead (see the Settlements tab).
+  const recordSettlementPayment = async (from, to, amount) => {
+    const entry = { id: crypto.randomUUID(), from, to, amount };
+    const updated = [...completedSettlements, entry];
     setCompletedSettlements(updated);
-
-    // Saved into the hidden sentinel row (see SETTLEMENT_STATUS_ID) since
-    // this status is global across all IPOs, not tied to a single project.
     try {
-      const { error } = await supabase.from(IPO_PROJECTS_TABLE).upsert({
-        id: SETTLEMENT_STATUS_ID,
-        name: "__settlement_status__",
-        ipo_details: { completedSettlements: updated },
-        participants: [],
-        transfers: [],
-      });
-      if (error) throw error;
+      await saveSettlementLedger(updated);
     } catch (error) {
-      console.error("Error saving settlement status:", error);
+      console.error("Error saving settlement payment:", error);
+      alert("Failed to save — please check your connection and try again.");
+      setCompletedSettlements(completedSettlements);
+    }
+  };
+
+  const undoSettlementPayment = async (id) => {
+    const updated = completedSettlements.filter((r) => r.id !== id);
+    setCompletedSettlements(updated);
+    try {
+      await saveSettlementLedger(updated);
+    } catch (error) {
+      console.error("Error undoing settlement payment:", error);
       alert("Failed to save — please check your connection and try again.");
       setCompletedSettlements(completedSettlements);
     }
@@ -1237,18 +1282,6 @@ export default function IPOPoolManager() {
     const m = ds.match(/(\d{1,2})\s+(\w+)\s+(\d{4})/i);
     if (m) { const mo = mm[m[2].toLowerCase()]||'01'; return new Date(`${m[3]}-${mo}-${m[1].padStart(2,'0')}`).getTime(); }
     return 0;
-  };
-
-  const getLatestIpoProject = () => {
-    const valid = (savedProjects || []).filter(
-      (p) => p?.ipoDetails?.name && Number(p.ipoDetails.ipoPrice) > 0
-    );
-    if (!valid.length) return null;
-    return valid.reduce((latest, p) =>
-      parseIpoDateKey(p.ipoDetails.applicationDate) >= parseIpoDateKey(latest.ipoDetails.applicationDate)
-        ? p
-        : latest
-    );
   };
 
   // Relationship priority — keep money within family/close circles first
@@ -3910,13 +3943,33 @@ You can paste multiple IPOs at once!`}
                   </div>
 
                   {settlementsScope === "latest" ? (() => {
-                    const latestProject = getLatestIpoProject();
-                    const b = latestProject ? computeSingleIpoBreakdown(latestProject) : null;
+                    const sortedProjects = (savedProjects || [])
+                      .filter((p) => p?.ipoDetails?.name && Number(p.ipoDetails.ipoPrice) > 0)
+                      .slice()
+                      .sort((a, b) => parseIpoDateKey(b.ipoDetails.applicationDate) - parseIpoDateKey(a.ipoDetails.applicationDate));
+                    const activeProject =
+                      sortedProjects.find((p) => p.id === selectedIpoForBreakdown) || sortedProjects[0];
+                    const b = activeProject ? computeSingleIpoBreakdown(activeProject) : null;
                     if (!b) {
                       return <div className="text-center py-12 text-gray-400">No IPO data yet.</div>;
                     }
                     return (
                       <>
+                        <div className="flex items-center gap-2 mb-4 flex-wrap">
+                          <label className="text-sm font-medium text-gray-600">Viewing:</label>
+                          <select
+                            value={activeProject.id}
+                            onChange={(e) => setSelectedIpoForBreakdown(e.target.value)}
+                            className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                          >
+                            {sortedProjects.map((p, i) => (
+                              <option key={p.id} value={p.id}>
+                                {i === 0 ? "🆕 " : ""}{p.ipoDetails.name} — {p.ipoDetails.applicationDate || "no date"}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
                         <div className="bg-white border-2 border-purple-200 rounded-xl p-5 mb-6">
                           <div className="flex items-center justify-between flex-wrap gap-2">
                             <div>
@@ -4020,20 +4073,27 @@ You can paste multiple IPOs at once!`}
                     );
                   })() : (() => {
                   const people = computeMemberTotals();
-                  const settlements = computeSettlementPairs(people.map((p) => ({ ...p, balance: p.settleBalance })));
 
-                  // Net out completed transfers so the cards and per-person
-                  // table reflect what's actually still outstanding, not
-                  // just the original fair-share target.
-                  const remainingByName = {};
-                  people.forEach(p => { remainingByName[p.name] = p.settleBalance; });
-                  settlements.forEach(s => {
-                    const key = `${s.from}-${s.to}-${s.amount}`;
-                    if (completedSettlements.includes(key)) {
-                      remainingByName[s.from] = (remainingByName[s.from] || 0) + s.amount;
-                      remainingByName[s.to] = (remainingByName[s.to] || 0) - s.amount;
-                    }
+                  // Net the recorded payment ledger against each person's
+                  // original balance, then recompute the pairing fresh from
+                  // what's actually still outstanding. This — rather than
+                  // matching against a specific pre-computed instruction —
+                  // is what survives new IPO data reshuffling the numbers.
+                  const paidOut = {};
+                  const received = {};
+                  completedSettlements.forEach((r) => {
+                    paidOut[r.from] = (paidOut[r.from] || 0) + r.amount;
+                    received[r.to] = (received[r.to] || 0) + r.amount;
                   });
+                  const remainingByName = {};
+                  people.forEach((p) => {
+                    remainingByName[p.name] =
+                      p.settleBalance + (paidOut[p.name] || 0) - (received[p.name] || 0);
+                  });
+
+                  const settlements = computeSettlementPairs(
+                    people.map((p) => ({ ...p, balance: remainingByName[p.name] }))
+                  );
 
                   return (
                     <>
@@ -4092,100 +4152,93 @@ You can paste multiple IPOs at once!`}
                               }`}
                         </p>
 
-                        {(() => {
-                          const settlementsWithStatus = settlements.map((s) => ({
-                            ...s,
-                            settlementKey: `${s.from}-${s.to}-${s.amount}`,
-                            isDone: completedSettlements.includes(`${s.from}-${s.to}-${s.amount}`),
-                          }));
-                          const pending = settlementsWithStatus.filter((s) => !s.isDone);
-                          const done = settlementsWithStatus.filter((s) => s.isDone);
-                          const visible = settlementSubTab === "current" ? pending : done;
-
-                          return (
-                          <>
-                          <div className="flex gap-2 mb-5">
-                            <button
-                              onClick={() => setSettlementSubTab("current")}
-                              className={`px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
-                                settlementSubTab === "current"
-                                  ? "bg-orange-500 text-white"
-                                  : "bg-white text-gray-600 border border-gray-300 hover:bg-gray-50"
-                              }`}
-                            >
-                              Current ({pending.length})
-                            </button>
-                            <button
-                              onClick={() => setSettlementSubTab("done")}
-                              className={`px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
-                                settlementSubTab === "done"
-                                  ? "bg-green-500 text-white"
-                                  : "bg-white text-gray-600 border border-gray-300 hover:bg-gray-50"
-                              }`}
-                            >
-                              ✓ Done ({done.length})
-                            </button>
-                          </div>
+                        <div className="flex gap-2 mb-5">
+                          <button
+                            onClick={() => setSettlementSubTab("current")}
+                            className={`px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
+                              settlementSubTab === "current"
+                                ? "bg-orange-500 text-white"
+                                : "bg-white text-gray-600 border border-gray-300 hover:bg-gray-50"
+                            }`}
+                          >
+                            Current ({settlements.length})
+                          </button>
+                          <button
+                            onClick={() => setSettlementSubTab("done")}
+                            className={`px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
+                              settlementSubTab === "done"
+                                ? "bg-green-500 text-white"
+                                : "bg-white text-gray-600 border border-gray-300 hover:bg-gray-50"
+                            }`}
+                          >
+                            ✓ Done ({completedSettlements.length})
+                          </button>
+                        </div>
 
                         <div className="space-y-3">
-                          {settlements.length === 0 ? (
-                            <div className="text-center py-6 text-green-600 font-semibold text-lg">
-                              ✅ Nothing to settle!
-                            </div>
-                          ) : visible.length === 0 ? (
+                          {settlementSubTab === "current" ? (
+                            settlements.length === 0 ? (
+                              <div className="text-center py-6 text-green-600 font-semibold text-lg">
+                                ✅ Nothing to settle!
+                              </div>
+                            ) : settlements.map((s, idx) => (
+                              <div
+                                key={idx}
+                                className="flex items-center gap-4 rounded-xl px-5 py-4 shadow-sm border border-yellow-200 bg-white transition-all"
+                              >
+                                <div className="w-7 h-7 rounded-full bg-yellow-400 text-white flex items-center justify-center font-bold text-xs flex-shrink-0">
+                                  {idx + 1}
+                                </div>
+                                <div className="flex-1 flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-lg text-red-700">{s.from}</span>
+                                  <span className="text-gray-400 text-sm">pays</span>
+                                  <span className="font-bold text-lg text-green-700">{s.to}</span>
+                                  {s.relation && (
+                                    <span className="text-xs font-medium bg-pink-100 text-pink-700 px-2 py-0.5 rounded-full">
+                                      {s.relation}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-2xl font-extrabold px-5 py-2 rounded-lg border text-indigo-700 bg-indigo-50 border-indigo-200">
+                                  RM {s.amount.toFixed(2)}
+                                </div>
+                                <button
+                                  onClick={() => recordSettlementPayment(s.from, s.to, s.amount)}
+                                  className="px-4 py-2 rounded-lg font-bold text-sm flex-shrink-0 transition-all bg-orange-500 text-white hover:bg-orange-600"
+                                >
+                                  Mark Done
+                                </button>
+                              </div>
+                            ))
+                          ) : completedSettlements.length === 0 ? (
                             <div className="text-center py-6 text-gray-400 font-medium">
-                              {settlementSubTab === "current"
-                                ? "🎉 All caught up — nothing pending!"
-                                : "No completed transfers yet."}
+                              No completed transfers yet.
                             </div>
-                          ) : visible.map((s, idx) => {
-                            const { settlementKey, isDone } = s;
-                            return (
+                          ) : completedSettlements.map((r, idx) => (
                             <div
-                              key={idx}
-                              className={`flex items-center gap-4 rounded-xl px-5 py-4 shadow-sm border transition-all ${
-                                isDone
-                                  ? "bg-green-50 border-green-300 opacity-70"
-                                  : "bg-white border-yellow-200"
-                              }`}
+                              key={r.id}
+                              className="flex items-center gap-4 rounded-xl px-5 py-4 shadow-sm border border-green-300 bg-green-50 opacity-70 transition-all"
                             >
                               <div className="w-7 h-7 rounded-full bg-yellow-400 text-white flex items-center justify-center font-bold text-xs flex-shrink-0">
                                 {idx + 1}
                               </div>
                               <div className="flex-1 flex items-center gap-2 flex-wrap">
-                                <span className={`font-bold text-lg ${isDone ? "line-through text-gray-500" : "text-red-700"}`}>{s.from}</span>
+                                <span className="font-bold text-lg line-through text-gray-500">{r.from}</span>
                                 <span className="text-gray-400 text-sm">pays</span>
-                                <span className={`font-bold text-lg ${isDone ? "line-through text-gray-500" : "text-green-700"}`}>{s.to}</span>
-                                {s.relation && (
-                                  <span className="text-xs font-medium bg-pink-100 text-pink-700 px-2 py-0.5 rounded-full">
-                                    {s.relation}
-                                  </span>
-                                )}
+                                <span className="font-bold text-lg line-through text-gray-500">{r.to}</span>
                               </div>
-                              <div className={`text-2xl font-extrabold px-5 py-2 rounded-lg border ${
-                                isDone
-                                  ? "text-green-700 bg-green-50 border-green-200"
-                                  : "text-indigo-700 bg-indigo-50 border-indigo-200"
-                              }`}>
-                                RM {s.amount.toFixed(2)}
+                              <div className="text-2xl font-extrabold px-5 py-2 rounded-lg border text-green-700 bg-green-50 border-green-200">
+                                RM {r.amount.toFixed(2)}
                               </div>
                               <button
-                                onClick={() => toggleSettlementDone(settlementKey)}
-                                className={`px-4 py-2 rounded-lg font-bold text-sm flex-shrink-0 transition-all ${
-                                  isDone
-                                    ? "bg-green-500 text-white hover:bg-green-600"
-                                    : "bg-orange-500 text-white hover:bg-orange-600"
-                                }`}
+                                onClick={() => undoSettlementPayment(r.id)}
+                                className="px-4 py-2 rounded-lg font-bold text-sm flex-shrink-0 transition-all bg-green-500 text-white hover:bg-green-600"
                               >
-                                {isDone ? "✓ Done" : "Mark Done"}
+                                ✓ Done
                               </button>
                             </div>
-                            );
-                          })}
+                          ))}
                         </div>
-                        </>
-                          );
-                        })()}
                       </div>
 
                       {/* Per-person breakdown */}
