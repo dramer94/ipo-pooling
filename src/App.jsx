@@ -19,6 +19,68 @@ import {
 import { supabase, IPO_PROJECTS_TABLE } from "./supabase";
 import { parseIPOText, convertToAppFormat } from "./ipoTextParser";
 
+// Per-IPO history table for one member — reused by the Summary tab's
+// accordion, the Settlements per-person breakdown, and the Settlements net
+// position cards, so all three stay in sync automatically.
+function MemberIpoHistoryTable({ history }) {
+  const totalNet = history.reduce((s, r) => s + r.net, 0);
+  const totalFs = history.reduce((s, r) => s + r.fairShare, 0);
+  return (
+    <table className="w-full text-xs mt-1">
+      <thead>
+        <tr className="text-gray-500 border-b border-indigo-200">
+          <th className="text-left py-2 pr-4 font-medium">IPO</th>
+          <th className="text-left py-2 pr-4 font-medium">Date</th>
+          <th className="text-right py-2 pr-4 font-medium">Capital</th>
+          <th className="text-right py-2 pr-4 font-medium">Lots</th>
+          <th className="text-center py-2 pr-4 font-medium">Result</th>
+          <th className="text-right py-2 pr-4 font-medium">Net Profit</th>
+          <th className="text-right py-2 font-medium">Fair Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {history.map((row, ri) => (
+          <tr key={ri} className={`border-b border-indigo-100 last:border-0 ${row.gotAllocation && !row.pending ? "bg-green-50/60" : ""}`}>
+            <td className="py-2 pr-4 font-medium text-gray-700 max-w-[180px] truncate">{row.ipoName}</td>
+            <td className="py-2 pr-4 text-gray-400 whitespace-nowrap">{row.date || "—"}</td>
+            <td className="py-2 pr-4 text-right text-gray-600">RM {row.capitalIn.toLocaleString()}</td>
+            <td className="py-2 pr-4 text-right text-gray-500">{row.lotsApplied}</td>
+            <td className="py-2 pr-4 text-center whitespace-nowrap">
+              {row.pending
+                ? <span className="text-amber-600 font-medium">⏳ {row.lotsAllocated} lots</span>
+                : row.gotAllocation
+                ? <span className="text-green-600 font-medium">✅ {row.lotsAllocated} @ RM{row.sellingPrice}</span>
+                : <span className="text-gray-400">❌</span>}
+            </td>
+            <td className={`py-2 pr-4 text-right font-semibold ${row.net > 0 ? "text-green-600" : row.net < 0 ? "text-red-600" : "text-gray-300"}`}>
+              {row.gotAllocation && !row.pending ? `RM ${row.net.toFixed(2)}` : "—"}
+            </td>
+            <td className={`py-2 text-right font-bold ${row.fairShare > 0 ? "text-indigo-600" : row.fairShare < 0 ? "text-red-500" : "text-gray-300"}`}>
+              {row.fairShare !== 0 ? `RM ${row.fairShare.toFixed(2)}` : "—"}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+      <tfoot>
+        <tr className="border-t-2 border-indigo-300 font-semibold text-xs">
+          <td colSpan={2} className="py-2 text-gray-700">{history.length} IPOs · {history.filter(r => r.gotAllocation).length} wins</td>
+          <td className="py-2 pr-4 text-right text-gray-700">RM {history.reduce((s, r) => s + r.capitalIn, 0).toLocaleString()}</td>
+          <td className="py-2 pr-4 text-right text-gray-500">{history.reduce((s, r) => s + r.lotsApplied, 0)}</td>
+          <td className="py-2 pr-4 text-center text-gray-500">{history.filter(r => r.gotAllocation && !r.pending).length} allocated</td>
+          <td className={`py-2 pr-4 text-right ${totalNet >= 0 ? "text-green-600" : "text-red-600"}`}>RM {totalNet.toFixed(2)}</td>
+          <td className={`py-2 text-right ${totalFs >= 0 ? "text-indigo-600" : "text-red-600"}`}>RM {totalFs.toFixed(2)}</td>
+        </tr>
+        <tr className="text-xs">
+          <td colSpan={5} className="py-1.5 text-gray-500 italic">Balance (Fair Share − Cash Pocketed)</td>
+          <td colSpan={2} className={`py-1.5 text-right font-bold ${(totalFs - totalNet) >= 0 ? "text-green-600" : "text-red-600"}`}>
+            {(totalFs - totalNet) >= 0 ? "Receive" : "Pay"} RM {Math.abs(totalFs - totalNet).toFixed(2)}
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  );
+}
+
 export default function IPOPoolManager() {
   const [savedProjects, setSavedProjects] = useState(() => {
     // Load saved projects from localStorage on component mount
@@ -2077,63 +2139,10 @@ You can paste multiple IPOs at once!`}
                                   ];
                                   if (isOpen) {
                                     const history = getMemberIpoHistory(p.name);
-                                    const totalNet = history.reduce((s,r)=>s+r.net,0);
-                                    const totalFs = history.reduce((s,r)=>s+r.fairShare,0);
                                     result.push(
                                       <tr key={`detail-${idx}`}>
                                         <td colSpan={6} className="bg-indigo-50 border-b px-6 pb-4 pt-1">
-                                          <table className="w-full text-xs mt-1">
-                                            <thead>
-                                              <tr className="text-gray-500 border-b border-indigo-200">
-                                                <th className="text-left py-2 pr-4 font-medium">IPO</th>
-                                                <th className="text-left py-2 pr-4 font-medium">Date</th>
-                                                <th className="text-right py-2 pr-4 font-medium">Capital</th>
-                                                <th className="text-right py-2 pr-4 font-medium">Lots</th>
-                                                <th className="text-center py-2 pr-4 font-medium">Result</th>
-                                                <th className="text-right py-2 pr-4 font-medium">Net Profit</th>
-                                                <th className="text-right py-2 font-medium">Fair Share</th>
-                                              </tr>
-                                            </thead>
-                                            <tbody>
-                                              {history.map((row, ri) => (
-                                                <tr key={ri} className={`border-b border-indigo-100 last:border-0 ${row.gotAllocation && !row.pending ? 'bg-green-50/60' : ''}`}>
-                                                  <td className="py-2 pr-4 font-medium text-gray-700 max-w-[180px] truncate">{row.ipoName}</td>
-                                                  <td className="py-2 pr-4 text-gray-400 whitespace-nowrap">{row.date || '—'}</td>
-                                                  <td className="py-2 pr-4 text-right text-gray-600">RM {row.capitalIn.toLocaleString()}</td>
-                                                  <td className="py-2 pr-4 text-right text-gray-500">{row.lotsApplied}</td>
-                                                  <td className="py-2 pr-4 text-center whitespace-nowrap">
-                                                    {row.pending
-                                                      ? <span className="text-amber-600 font-medium">⏳ {row.lotsAllocated} lots</span>
-                                                      : row.gotAllocation
-                                                      ? <span className="text-green-600 font-medium">✅ {row.lotsAllocated} @ RM{row.sellingPrice}</span>
-                                                      : <span className="text-gray-400">❌</span>}
-                                                  </td>
-                                                  <td className={`py-2 pr-4 text-right font-semibold ${row.net > 0 ? 'text-green-600' : row.net < 0 ? 'text-red-600' : 'text-gray-300'}`}>
-                                                    {row.gotAllocation && !row.pending ? `RM ${row.net.toFixed(2)}` : '—'}
-                                                  </td>
-                                                  <td className={`py-2 text-right font-bold ${row.fairShare > 0 ? 'text-indigo-600' : row.fairShare < 0 ? 'text-red-500' : 'text-gray-300'}`}>
-                                                    {row.fairShare !== 0 ? `RM ${row.fairShare.toFixed(2)}` : '—'}
-                                                  </td>
-                                                </tr>
-                                              ))}
-                                            </tbody>
-                                            <tfoot>
-                                              <tr className="border-t-2 border-indigo-300 font-semibold text-xs">
-                                                <td colSpan={2} className="py-2 text-gray-700">{history.length} IPOs · {history.filter(r=>r.gotAllocation).length} wins</td>
-                                                <td className="py-2 pr-4 text-right text-gray-700">RM {history.reduce((s,r)=>s+r.capitalIn,0).toLocaleString()}</td>
-                                                <td className="py-2 pr-4 text-right text-gray-500">{history.reduce((s,r)=>s+r.lotsApplied,0)}</td>
-                                                <td className="py-2 pr-4 text-center text-gray-500">{history.filter(r=>r.gotAllocation&&!r.pending).length} allocated</td>
-                                                <td className={`py-2 pr-4 text-right ${totalNet>=0?'text-green-600':'text-red-600'}`}>RM {totalNet.toFixed(2)}</td>
-                                                <td className={`py-2 text-right ${totalFs>=0?'text-indigo-600':'text-red-600'}`}>RM {totalFs.toFixed(2)}</td>
-                                              </tr>
-                                              <tr className="text-xs">
-                                                <td colSpan={5} className="py-1.5 text-gray-500 italic">Balance (Fair Share − Cash Pocketed)</td>
-                                                <td colSpan={2} className={`py-1.5 text-right font-bold ${(totalFs-totalNet)>=0?'text-green-600':'text-red-600'}`}>
-                                                  {(totalFs-totalNet)>=0?'Receive':'Pay'} RM {Math.abs(totalFs-totalNet).toFixed(2)}
-                                                </td>
-                                              </tr>
-                                            </tfoot>
-                                          </table>
+                                          <MemberIpoHistoryTable history={history} />
                                         </td>
                                       </tr>
                                     );
@@ -4098,16 +4107,22 @@ You can paste multiple IPOs at once!`}
                   return (
                     <>
                       {/* Net position cards */}
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-8">
+                      <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 ${expandedMember ? "mb-3" : "mb-8"}`}>
                         {people
                           .slice()
                           .sort((a, b) => remainingByName[b.name] - remainingByName[a.name])
                           .map(p => {
                             const bal = remainingByName[p.name];
+                            const isOpen = expandedMember === p.name;
                             return (
                             <div
                               key={p.name}
-                              className={`rounded-xl p-4 text-center border-2 ${
+                              onClick={() => setExpandedMember(isOpen ? null : p.name)}
+                              className={`rounded-xl p-4 text-center border-2 cursor-pointer transition-all ${
+                                isOpen
+                                  ? "ring-2 ring-indigo-400 ring-offset-1"
+                                  : ""
+                              } ${
                                 bal > 0.01
                                   ? "bg-green-50 border-green-400"
                                   : bal < -0.01
@@ -4115,7 +4130,10 @@ You can paste multiple IPOs at once!`}
                                   : "bg-gray-50 border-gray-300"
                               }`}
                             >
-                              <div className="font-bold text-gray-800 text-lg mb-1">{p.name}</div>
+                              <div className="font-bold text-gray-800 text-lg mb-1 flex items-center justify-center gap-1">
+                                <span className="text-gray-400 text-xs">{isOpen ? "▼" : "▶"}</span>
+                                {p.name}
+                              </div>
                               <div className={`text-2xl font-extrabold ${
                                 bal > 0.01 ? "text-green-600"
                                   : bal < -0.01 ? "text-red-600"
@@ -4136,6 +4154,13 @@ You can paste multiple IPOs at once!`}
                             );
                           })}
                       </div>
+
+                      {expandedMember && (
+                        <div className="bg-indigo-50 border-2 border-indigo-200 rounded-xl px-5 py-4 mb-8 overflow-x-auto">
+                          <h4 className="font-bold text-indigo-900 text-sm mb-2">{expandedMember}'s IPO breakdown</h4>
+                          <MemberIpoHistoryTable history={getMemberIpoHistory(expandedMember)} />
+                        </div>
+                      )}
 
                       {/* Transfer instructions */}
                       <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-400 rounded-xl p-6 mb-6">
@@ -4305,63 +4330,10 @@ You can paste multiple IPOs at once!`}
                                   ];
                                   if (isOpen) {
                                     const history = getMemberIpoHistory(p.name);
-                                    const totalNet = history.reduce((s, r) => s + r.net, 0);
-                                    const totalFs = history.reduce((s, r) => s + r.fairShare, 0);
                                     rows.push(
                                       <tr key={`detail-${idx}`}>
                                         <td colSpan={6} className="bg-indigo-50 border-b px-6 pb-4 pt-1">
-                                          <table className="w-full text-xs mt-1">
-                                            <thead>
-                                              <tr className="text-gray-500 border-b border-indigo-200">
-                                                <th className="text-left py-2 pr-4 font-medium">IPO</th>
-                                                <th className="text-left py-2 pr-4 font-medium">Date</th>
-                                                <th className="text-right py-2 pr-4 font-medium">Capital</th>
-                                                <th className="text-right py-2 pr-4 font-medium">Lots</th>
-                                                <th className="text-center py-2 pr-4 font-medium">Result</th>
-                                                <th className="text-right py-2 pr-4 font-medium">Net Profit</th>
-                                                <th className="text-right py-2 font-medium">Fair Share</th>
-                                              </tr>
-                                            </thead>
-                                            <tbody>
-                                              {history.map((row, ri) => (
-                                                <tr key={ri} className={`border-b border-indigo-100 last:border-0 ${row.gotAllocation && !row.pending ? "bg-green-50/60" : ""}`}>
-                                                  <td className="py-2 pr-4 font-medium text-gray-700 max-w-[180px] truncate">{row.ipoName}</td>
-                                                  <td className="py-2 pr-4 text-gray-400 whitespace-nowrap">{row.date || "—"}</td>
-                                                  <td className="py-2 pr-4 text-right text-gray-600">RM {row.capitalIn.toLocaleString()}</td>
-                                                  <td className="py-2 pr-4 text-right text-gray-500">{row.lotsApplied}</td>
-                                                  <td className="py-2 pr-4 text-center whitespace-nowrap">
-                                                    {row.pending
-                                                      ? <span className="text-amber-600 font-medium">⏳ {row.lotsAllocated} lots</span>
-                                                      : row.gotAllocation
-                                                      ? <span className="text-green-600 font-medium">✅ {row.lotsAllocated} @ RM{row.sellingPrice}</span>
-                                                      : <span className="text-gray-400">❌</span>}
-                                                  </td>
-                                                  <td className={`py-2 pr-4 text-right font-semibold ${row.net > 0 ? "text-green-600" : row.net < 0 ? "text-red-600" : "text-gray-300"}`}>
-                                                    {row.gotAllocation && !row.pending ? `RM ${row.net.toFixed(2)}` : "—"}
-                                                  </td>
-                                                  <td className={`py-2 text-right font-bold ${row.fairShare > 0 ? "text-indigo-600" : row.fairShare < 0 ? "text-red-500" : "text-gray-300"}`}>
-                                                    {row.fairShare !== 0 ? `RM ${row.fairShare.toFixed(2)}` : "—"}
-                                                  </td>
-                                                </tr>
-                                              ))}
-                                            </tbody>
-                                            <tfoot>
-                                              <tr className="border-t-2 border-indigo-300 font-semibold text-xs">
-                                                <td colSpan={2} className="py-2 text-gray-700">{history.length} IPOs · {history.filter(r => r.gotAllocation).length} wins</td>
-                                                <td className="py-2 pr-4 text-right text-gray-700">RM {history.reduce((s, r) => s + r.capitalIn, 0).toLocaleString()}</td>
-                                                <td className="py-2 pr-4 text-right text-gray-500">{history.reduce((s, r) => s + r.lotsApplied, 0)}</td>
-                                                <td className="py-2 pr-4 text-center text-gray-500">{history.filter(r => r.gotAllocation && !r.pending).length} allocated</td>
-                                                <td className={`py-2 pr-4 text-right ${totalNet >= 0 ? "text-green-600" : "text-red-600"}`}>RM {totalNet.toFixed(2)}</td>
-                                                <td className={`py-2 text-right ${totalFs >= 0 ? "text-indigo-600" : "text-red-600"}`}>RM {totalFs.toFixed(2)}</td>
-                                              </tr>
-                                              <tr className="text-xs">
-                                                <td colSpan={5} className="py-1.5 text-gray-500 italic">Balance (Fair Share − Cash Pocketed) — before any completed transfers are netted out</td>
-                                                <td colSpan={2} className={`py-1.5 text-right font-bold ${(totalFs - totalNet) >= 0 ? "text-green-600" : "text-red-600"}`}>
-                                                  {(totalFs - totalNet) >= 0 ? "Receive" : "Pay"} RM {Math.abs(totalFs - totalNet).toFixed(2)}
-                                                </td>
-                                              </tr>
-                                            </tfoot>
-                                          </table>
+                                          <MemberIpoHistoryTable history={history} />
                                         </td>
                                       </tr>
                                     );
