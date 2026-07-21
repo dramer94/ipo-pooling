@@ -107,11 +107,13 @@ export default function IPOPoolManager() {
   // Load projects from cloud on component mount + subscribe to realtime changes
   useEffect(() => {
     loadPublicProjectsFromCloud();
+    loadSettlementStatus();
 
     const channel = supabase
       .channel('ipo_projects_realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ipo_projects' }, () => {
         loadPublicProjectsFromCloud();
+        loadSettlementStatus();
       })
       .subscribe();
 
@@ -284,7 +286,6 @@ export default function IPOPoolManager() {
         ipoDetails,
         participants,
         transfers,
-        completedSettlements,
       };
 
       // Save to cloud
@@ -294,7 +295,6 @@ export default function IPOPoolManager() {
         ipo_details: projectData.ipoDetails,
         participants: projectData.participants,
         transfers: projectData.transfers,
-        completed_settlements: projectData.completedSettlements,
       });
 
       if (error) throw error;
@@ -323,7 +323,6 @@ export default function IPOPoolManager() {
         ipoDetails,
         participants,
         transfers,
-        completedSettlements,
       };
 
       if (currentProjectId) {
@@ -345,7 +344,6 @@ export default function IPOPoolManager() {
     setIpoDetails(project.ipoDetails);
     setParticipants(project.participants);
     setTransfers(project.transfers);
-    setCompletedSettlements(project.completedSettlements || []);
     setCurrentProjectId(project.id);
     setShowProjectList(false);
     setActiveTab("ipo");
@@ -400,9 +398,10 @@ export default function IPOPoolManager() {
           ipoDetails: row.ipo_details,
           participants: row.participants,
           transfers: row.transfers,
-          completedSettlements: row.completed_settlements || [],
         }))
-        // Skip junk/blank rows (no IPO name or price) so counts stay correct
+        // Skip junk/blank rows (no IPO name or price) so counts stay correct.
+        // This also excludes the hidden settlement-status sentinel row (see
+        // SETTLEMENT_STATUS_ID) since it has no ipo_details.name.
         .filter(
           (p) =>
             p.ipoDetails &&
@@ -423,6 +422,25 @@ export default function IPOPoolManager() {
       }
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Completed settlements are global (spanning all IPOs), not tied to any
+  // single project, so they're stored in one hidden row in the same table
+  // rather than requiring a schema change or a new table.
+  const SETTLEMENT_STATUS_ID = "00000000-0000-0000-0000-000000000001";
+
+  const loadSettlementStatus = async () => {
+    try {
+      const { data, error } = await supabase
+        .from(IPO_PROJECTS_TABLE)
+        .select("ipo_details")
+        .eq("id", SETTLEMENT_STATUS_ID)
+        .maybeSingle();
+      if (error) throw error;
+      setCompletedSettlements(data?.ipo_details?.completedSettlements || []);
+    } catch (error) {
+      console.error("Error loading settlement status:", error);
     }
   };
 
@@ -593,20 +611,21 @@ export default function IPOPoolManager() {
       : [...completedSettlements, settlementKey];
     setCompletedSettlements(updated);
 
-    // Auto-save to cloud
-    if (currentProjectId) {
-      try {
-        await supabase.from(IPO_PROJECTS_TABLE).upsert({
-          id: currentProjectId,
-          name: ipoDetails.name,
-          ipo_details: ipoDetails,
-          participants,
-          transfers,
-          completed_settlements: updated,
-        });
-      } catch (error) {
-        console.error("Error saving settlement status:", error);
-      }
+    // Saved into the hidden sentinel row (see SETTLEMENT_STATUS_ID) since
+    // this status is global across all IPOs, not tied to a single project.
+    try {
+      const { error } = await supabase.from(IPO_PROJECTS_TABLE).upsert({
+        id: SETTLEMENT_STATUS_ID,
+        name: "__settlement_status__",
+        ipo_details: { completedSettlements: updated },
+        participants: [],
+        transfers: [],
+      });
+      if (error) throw error;
+    } catch (error) {
+      console.error("Error saving settlement status:", error);
+      alert("Failed to save — please check your connection and try again.");
+      setCompletedSettlements(completedSettlements);
     }
   };
 
