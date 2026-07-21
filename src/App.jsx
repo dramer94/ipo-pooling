@@ -59,6 +59,7 @@ export default function IPOPoolManager() {
   const [ipoSearch, setIpoSearch] = useState("");
   const [expandedMember, setExpandedMember] = useState(null);
   const [completedSettlements, setCompletedSettlements] = useState([]);
+  const [settlementSubTab, setSettlementSubTab] = useState("current");
 
   // Real admin auth via Supabase (works with Row Level Security). Single
   // shared account; the login box only asks for the password, email is fixed.
@@ -3838,7 +3839,7 @@ You can paste multiple IPOs at once!`}
                         <h3 className="text-xl font-bold text-yellow-900 mb-1">
                           Transfer Instructions
                         </h3>
-                        <p className="text-sm text-yellow-700 mb-5">
+                        <p className="text-sm text-yellow-700 mb-4">
                           {settlements.length === 0
                             ? "All accounts are already settled — no transfers needed."
                             : `${settlements.length} transfer${settlements.length > 1 ? "s" : ""} needed to close all ${savedProjects.length} IPOs ${
@@ -3848,14 +3849,54 @@ You can paste multiple IPOs at once!`}
                               }`}
                         </p>
 
+                        {(() => {
+                          const settlementsWithStatus = settlements.map((s) => ({
+                            ...s,
+                            settlementKey: `${s.from}-${s.to}-${s.amount}`,
+                            isDone: completedSettlements.includes(`${s.from}-${s.to}-${s.amount}`),
+                          }));
+                          const pending = settlementsWithStatus.filter((s) => !s.isDone);
+                          const done = settlementsWithStatus.filter((s) => s.isDone);
+                          const visible = settlementSubTab === "current" ? pending : done;
+
+                          return (
+                          <>
+                          <div className="flex gap-2 mb-5">
+                            <button
+                              onClick={() => setSettlementSubTab("current")}
+                              className={`px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
+                                settlementSubTab === "current"
+                                  ? "bg-orange-500 text-white"
+                                  : "bg-white text-gray-600 border border-gray-300 hover:bg-gray-50"
+                              }`}
+                            >
+                              Current ({pending.length})
+                            </button>
+                            <button
+                              onClick={() => setSettlementSubTab("done")}
+                              className={`px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
+                                settlementSubTab === "done"
+                                  ? "bg-green-500 text-white"
+                                  : "bg-white text-gray-600 border border-gray-300 hover:bg-gray-50"
+                              }`}
+                            >
+                              ✓ Done ({done.length})
+                            </button>
+                          </div>
+
                         <div className="space-y-3">
                           {settlements.length === 0 ? (
                             <div className="text-center py-6 text-green-600 font-semibold text-lg">
                               ✅ Nothing to settle!
                             </div>
-                          ) : settlements.map((s, idx) => {
-                            const settlementKey = `${s.from}-${s.to}-${s.amount}`;
-                            const isDone = completedSettlements.includes(settlementKey);
+                          ) : visible.length === 0 ? (
+                            <div className="text-center py-6 text-gray-400 font-medium">
+                              {settlementSubTab === "current"
+                                ? "🎉 All caught up — nothing pending!"
+                                : "No completed transfers yet."}
+                            </div>
+                          ) : visible.map((s, idx) => {
+                            const { settlementKey, isDone } = s;
                             return (
                             <div
                               key={idx}
@@ -3899,6 +3940,9 @@ You can paste multiple IPOs at once!`}
                             );
                           })}
                         </div>
+                        </>
+                          );
+                        })()}
                       </div>
 
                       {/* Per-person breakdown */}
