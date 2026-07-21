@@ -25,6 +25,11 @@ import { parseIPOText, convertToAppFormat } from "./ipoTextParser";
 function MemberIpoHistoryTable({ history }) {
   const totalNet = history.reduce((s, r) => s + r.net, 0);
   const totalFs = history.reduce((s, r) => s + r.fairShare, 0);
+  // Biggest contributors first — "where did this balance come from" is the
+  // question this table answers, and chronological order buries the answer
+  // among a long tail of small/zero-impact rows.
+  const sorted = history.slice().sort((a, b) => Math.abs(b.fairShare) - Math.abs(a.fairShare));
+  const maxAbsFs = Math.max(1, ...sorted.map((r) => Math.abs(r.fairShare)));
   return (
     <table className="w-full text-xs mt-1">
       <thead>
@@ -39,7 +44,7 @@ function MemberIpoHistoryTable({ history }) {
         </tr>
       </thead>
       <tbody>
-        {history.map((row, ri) => (
+        {sorted.map((row, ri) => (
           <tr key={ri} className={`border-b border-indigo-100 last:border-0 ${row.gotAllocation && !row.pending ? "bg-green-50/60" : ""}`}>
             <td className="py-2 pr-4 font-medium text-gray-700 max-w-[180px] truncate">{row.ipoName}</td>
             <td className="py-2 pr-4 text-gray-400 whitespace-nowrap">{row.date || "—"}</td>
@@ -55,8 +60,18 @@ function MemberIpoHistoryTable({ history }) {
             <td className={`py-2 pr-4 text-right font-semibold ${row.net > 0 ? "text-green-600" : row.net < 0 ? "text-red-600" : "text-gray-300"}`}>
               {row.gotAllocation && !row.pending ? `RM ${row.net.toFixed(2)}` : "—"}
             </td>
-            <td className={`py-2 text-right font-bold ${row.fairShare > 0 ? "text-indigo-600" : row.fairShare < 0 ? "text-red-500" : "text-gray-300"}`}>
-              {row.fairShare !== 0 ? `RM ${row.fairShare.toFixed(2)}` : "—"}
+            <td className="py-2 text-right">
+              <div className="flex items-center justify-end gap-2">
+                <div className="relative w-14 h-2 bg-gray-100 rounded-full overflow-hidden flex-shrink-0">
+                  <div
+                    className={`absolute inset-y-0 right-0 rounded-full ${row.fairShare >= 0 ? "bg-indigo-400" : "bg-red-400"}`}
+                    style={{ width: `${(Math.abs(row.fairShare) / maxAbsFs) * 100}%` }}
+                  />
+                </div>
+                <span className={`font-bold whitespace-nowrap ${row.fairShare > 0 ? "text-indigo-600" : row.fairShare < 0 ? "text-red-500" : "text-gray-300"}`}>
+                  {row.fairShare !== 0 ? `RM ${row.fairShare.toFixed(2)}` : "—"}
+                </span>
+              </div>
             </td>
           </tr>
         ))}
