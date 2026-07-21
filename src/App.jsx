@@ -57,6 +57,8 @@ export default function IPOPoolManager() {
   const [expandedRows, setExpandedRows] = useState({});
   const [expandedIpos, setExpandedIpos] = useState({});
   const [ipoSearch, setIpoSearch] = useState("");
+  const [expandedMember, setExpandedMember] = useState(null);
+  const [completedSettlements, setCompletedSettlements] = useState([]);
 
   // Real admin auth via Supabase (works with Row Level Security). Single
   // shared account; the login box only asks for the password, email is fixed.
@@ -282,6 +284,7 @@ export default function IPOPoolManager() {
         ipoDetails,
         participants,
         transfers,
+        completedSettlements,
       };
 
       // Save to cloud
@@ -291,6 +294,7 @@ export default function IPOPoolManager() {
         ipo_details: projectData.ipoDetails,
         participants: projectData.participants,
         transfers: projectData.transfers,
+        completed_settlements: projectData.completedSettlements,
       });
 
       if (error) throw error;
@@ -319,6 +323,7 @@ export default function IPOPoolManager() {
         ipoDetails,
         participants,
         transfers,
+        completedSettlements,
       };
 
       if (currentProjectId) {
@@ -340,6 +345,7 @@ export default function IPOPoolManager() {
     setIpoDetails(project.ipoDetails);
     setParticipants(project.participants);
     setTransfers(project.transfers);
+    setCompletedSettlements(project.completedSettlements || []);
     setCurrentProjectId(project.id);
     setShowProjectList(false);
     setActiveTab("ipo");
@@ -394,6 +400,7 @@ export default function IPOPoolManager() {
           ipoDetails: row.ipo_details,
           participants: row.participants,
           transfers: row.transfers,
+          completedSettlements: row.completed_settlements || [],
         }))
         // Skip junk/blank rows (no IPO name or price) so counts stay correct
         .filter(
@@ -580,6 +587,29 @@ export default function IPOPoolManager() {
     );
   };
 
+  const toggleSettlementDone = async (settlementKey) => {
+    const updated = completedSettlements.includes(settlementKey)
+      ? completedSettlements.filter((k) => k !== settlementKey)
+      : [...completedSettlements, settlementKey];
+    setCompletedSettlements(updated);
+
+    // Auto-save to cloud
+    if (currentProjectId) {
+      try {
+        await supabase.from(IPO_PROJECTS_TABLE).upsert({
+          id: currentProjectId,
+          name: ipoDetails.name,
+          ipo_details: ipoDetails,
+          participants,
+          transfers,
+          completed_settlements: updated,
+        });
+      } catch (error) {
+        console.error("Error saving settlement status:", error);
+      }
+    }
+  };
+
   const calculateParticipantDetails = (p) => {
     const ipoPrice = Number(ipoDetails.ipoPrice);
     const sellingPrice = Number(p.sellingPrice);
@@ -591,8 +621,8 @@ export default function IPOPoolManager() {
 
     const capitalUsedToApply = lotsApplied * ipoPrice * lotSize;
     const allocatedAmount = lotsAllocated * ipoPrice * lotSize;
-    const grossProfit = lotsAllocated * (sellingPrice - ipoPrice) * lotSize;
-    const profitLoss = grossProfit - sellingFee;
+    const grossProfit = sellingPrice > 0 ? lotsAllocated * (sellingPrice - ipoPrice) * lotSize : 0;
+    const profitLoss = grossProfit - (sellingPrice > 0 ? sellingFee : 0);
 
     return {
       capitalUsedToApply,
@@ -835,8 +865,8 @@ export default function IPOPoolManager() {
         const sellingFee = Number(p.sellingFee || 0);
         const lotsAllocated = Number(p.lotsAllocated || 0);
 
-        const grossProfit = lotsAllocated * (sellingPrice - ipoPrice) * lotSize;
-        const profitLoss = grossProfit - sellingFee;
+        const grossProfit = sellingPrice > 0 ? lotsAllocated * (sellingPrice - ipoPrice) * lotSize : 0;
+        const profitLoss = grossProfit - (sellingPrice > 0 ? sellingFee : 0);
         return sum + profitLoss;
       }, 0);
 
@@ -875,8 +905,8 @@ export default function IPOPoolManager() {
         }
 
         const capitalUsedToApply = lotsApplied * ipoPrice * lotSize;
-        const grossProfit = lotsAllocated * (sellingPrice - ipoPrice) * lotSize;
-        const actualProfitReceived = grossProfit - sellingFee;
+        const grossProfit = sellingPrice > 0 ? lotsAllocated * (sellingPrice - ipoPrice) * lotSize : 0;
+        const actualProfitReceived = grossProfit - (sellingPrice > 0 ? sellingFee : 0);
 
         const capitalPercent =
           totalCapital > 0 ? (Number(processedP.initialCapital) / totalCapital) * 100 : 0;
@@ -933,8 +963,8 @@ export default function IPOPoolManager() {
                                   Math.max(Math.ceil(otherSellingAmount / 1000), 1);
               }
 
-              const otherGrossProfit = otherLotsAllocated * (otherSellingPrice - otherIpoPrice) * otherLotSize;
-              const otherActualProfit = otherGrossProfit - otherSellingFee;
+              const otherGrossProfit = otherSellingPrice > 0 ? otherLotsAllocated * (otherSellingPrice - otherIpoPrice) * otherLotSize : 0;
+              const otherActualProfit = otherGrossProfit - (otherSellingPrice > 0 ? otherSellingFee : 0);
               const otherAllocationBonus = otherActualProfit * 0.4;
 
               // Applicant gets 30% of the allocation bonus
@@ -1126,7 +1156,7 @@ export default function IPOPoolManager() {
         const capUsed = applied * price * lot; // capital actually put to work applying
         let fee = Number(p.sellingFee || 0);
         if (fee === 0 && la > 0 && sp > 0) fee = mPlusFee(la * lot * sp);
-        const net = p.gotAllocation ? la * (sp - price) * lot - fee : 0;
+        const net = (p.gotAllocation && sp > 0) ? la * (sp - price) * lot - fee : 0;
         return { capName, applicant, cap: Number(p.initialCapital || 0), capUsed, got: p.gotAllocation, la, net };
       });
 
@@ -1175,6 +1205,60 @@ export default function IPOPoolManager() {
       totalNetPosition: t.totalProfitShare, // final amount each member keeps
       settleBalance: t.totalProfitShare - t.totalProfit, // + = receive, - = pay
     }));
+  };
+
+  const getMemberIpoHistory = (memberName) => {
+    const mPlusFee = (amt) => amt > 0 ? Math.max(amt*0.001,8)+amt*0.0003+Math.max(Math.ceil(amt/1000),1) : 0;
+    const cleanN = (s) => (s||'').normalize('NFKC').replace(/[​-‍⁠﻿]/g,'').trim();
+    const parseKey = (ds) => {
+      if (!ds) return 0;
+      if (/^\d{4}-\d{2}-\d{2}/.test(ds)) return new Date(ds).getTime();
+      const mm = {'jan':'01','januari':'01','feb':'02','februari':'02','mar':'03','mac':'03','apr':'04','april':'04','may':'05','mei':'05','jun':'06','june':'06','jul':'07','july':'07','aug':'08','ogos':'08','sep':'09','sept':'09','oct':'10','okt':'10','nov':'11','dec':'12','dis':'12'};
+      const m = ds.match(/(\d{1,2})\s+(\w+)\s+(\d{4})/i);
+      if (m) { const mo = mm[m[2].toLowerCase()]||'01'; return new Date(`${m[3]}-${mo}-${m[1].padStart(2,'0')}`).getTime(); }
+      return 0;
+    };
+    const rows = [];
+    (savedProjects||[]).forEach(project => {
+      const d = project?.ipoDetails;
+      if (!d?.name || !(Number(d.ipoPrice)>0)) return;
+      const price = Number(d.ipoPrice);
+      const lot = Number(d.lotSize||100);
+      const parts = project.participants||[];
+      const totalCapUsed = parts.reduce((s,p) => s+Number(p.lotsApplied||0)*price*lot, 0);
+      const totalProfit = parts.reduce((s,p) => {
+        const sp = Number(p.sellingPrice||0);
+        const la = Number(p.lotsAllocated||0);
+        if (!p.gotAllocation||sp===0) return s;
+        return s + la*(sp-price)*lot - mPlusFee(la*lot*sp);
+      }, 0);
+      parts.forEach(p => {
+        const bm = cleanN(p.name).match(/^(.+?)\s*\((.+?)\)$/);
+        const capName = bm ? cleanN(bm[1]) : cleanN(p.name);
+        const applicant = bm ? cleanN(bm[2]) : (!p.willApply ? cleanN(p.actualApplicantName||'') : '');
+        if (capName !== memberName && applicant !== memberName) return;
+        const sp = Number(p.sellingPrice||0);
+        const la = Number(p.lotsAllocated||0);
+        const capUsed = Number(p.lotsApplied||0)*price*lot;
+        const net = (p.gotAllocation && sp>0) ? la*(sp-price)*lot - mPlusFee(la*lot*sp) : 0;
+        let fairShare = 0;
+        if (totalProfit !== 0) {
+          if (capName === memberName) {
+            const w = totalCapUsed>0 ? capUsed/totalCapUsed : 0;
+            fairShare += w * totalProfit * 0.6;
+            if (p.gotAllocation) {
+              const bonus = net * 0.4;
+              fairShare += applicant ? bonus*0.7 : bonus;
+            }
+          }
+          if (applicant === memberName && p.gotAllocation) {
+            fairShare += net * 0.4 * 0.3;
+          }
+        }
+        rows.push({ ipoName: d.name, date: d.applicationDate, capitalIn: Number(p.initialCapital||0), lotsApplied: Number(p.lotsApplied||0), gotAllocation: !!p.gotAllocation, lotsAllocated: la, sellingPrice: sp, net, fairShare, pending: p.gotAllocation && sp===0 });
+      });
+    });
+    return rows.sort((a,b) => parseKey(a.date)-parseKey(b.date));
   };
 
   const distribution = calculateDistribution();
@@ -1755,7 +1839,7 @@ You can paste multiple IPOs at once!`}
                               <th className="text-right px-4 py-3 font-medium">Cap %</th>
                               <th className="text-center px-4 py-3 font-medium">IPOs / Won</th>
                               <th className="text-right px-4 py-3 font-medium">Cash Pocketed</th>
-                              <th className="text-right px-5 py-3 font-medium">Total Profit</th>
+                              <th className="text-right px-5 py-3 font-medium">Fair Share</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1764,11 +1848,17 @@ You can paste multiple IPOs at once!`}
                               return summaryData
                                 .slice()
                                 .sort((a, b) => b.totalNetPosition - a.totalNetPosition)
-                                .map((p, idx) => {
+                                .flatMap((p, idx) => {
                                   const capPct = totalCapAll > 0 ? (p.totalCapitalContributed / totalCapAll) * 100 : 0;
-                                  return (
-                                    <tr key={idx} className="border-b last:border-0 hover:bg-gray-50">
-                                      <td className="px-5 py-3 font-semibold text-gray-800">{p.name}</td>
+                                  const isOpen = expandedMember === p.name;
+                                  const result = [
+                                    <tr key={idx} className={`border-b cursor-pointer transition-colors ${isOpen ? 'bg-indigo-50' : 'hover:bg-gray-50'}`} onClick={() => setExpandedMember(isOpen ? null : p.name)}>
+                                      <td className="px-5 py-3 font-semibold text-gray-800">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="text-gray-400 text-xs w-3 flex-shrink-0">{isOpen ? '▼' : '▶'}</span>
+                                          {p.name}
+                                        </div>
+                                      </td>
                                       <td className="px-4 py-3 text-right text-gray-600">RM {p.totalCapitalContributed.toLocaleString()}</td>
                                       <td className="px-4 py-3 text-right text-gray-500">{capPct.toFixed(1)}%</td>
                                       <td className="px-4 py-3 text-center text-gray-500">
@@ -1781,7 +1871,71 @@ You can paste multiple IPOs at once!`}
                                         {p.totalProfitShare >= 0 ? "+" : ""}RM {p.totalProfitShare.toFixed(2)}
                                       </td>
                                     </tr>
-                                  );
+                                  ];
+                                  if (isOpen) {
+                                    const history = getMemberIpoHistory(p.name);
+                                    const totalNet = history.reduce((s,r)=>s+r.net,0);
+                                    const totalFs = history.reduce((s,r)=>s+r.fairShare,0);
+                                    result.push(
+                                      <tr key={`detail-${idx}`}>
+                                        <td colSpan={6} className="bg-indigo-50 border-b px-6 pb-4 pt-1">
+                                          <table className="w-full text-xs mt-1">
+                                            <thead>
+                                              <tr className="text-gray-500 border-b border-indigo-200">
+                                                <th className="text-left py-2 pr-4 font-medium">IPO</th>
+                                                <th className="text-left py-2 pr-4 font-medium">Date</th>
+                                                <th className="text-right py-2 pr-4 font-medium">Capital</th>
+                                                <th className="text-right py-2 pr-4 font-medium">Lots</th>
+                                                <th className="text-center py-2 pr-4 font-medium">Result</th>
+                                                <th className="text-right py-2 pr-4 font-medium">Net Profit</th>
+                                                <th className="text-right py-2 font-medium">Fair Share</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {history.map((row, ri) => (
+                                                <tr key={ri} className={`border-b border-indigo-100 last:border-0 ${row.gotAllocation && !row.pending ? 'bg-green-50/60' : ''}`}>
+                                                  <td className="py-2 pr-4 font-medium text-gray-700 max-w-[180px] truncate">{row.ipoName}</td>
+                                                  <td className="py-2 pr-4 text-gray-400 whitespace-nowrap">{row.date || '—'}</td>
+                                                  <td className="py-2 pr-4 text-right text-gray-600">RM {row.capitalIn.toLocaleString()}</td>
+                                                  <td className="py-2 pr-4 text-right text-gray-500">{row.lotsApplied}</td>
+                                                  <td className="py-2 pr-4 text-center whitespace-nowrap">
+                                                    {row.pending
+                                                      ? <span className="text-amber-600 font-medium">⏳ {row.lotsAllocated} lots</span>
+                                                      : row.gotAllocation
+                                                      ? <span className="text-green-600 font-medium">✅ {row.lotsAllocated} @ RM{row.sellingPrice}</span>
+                                                      : <span className="text-gray-400">❌</span>}
+                                                  </td>
+                                                  <td className={`py-2 pr-4 text-right font-semibold ${row.net > 0 ? 'text-green-600' : row.net < 0 ? 'text-red-600' : 'text-gray-300'}`}>
+                                                    {row.gotAllocation && !row.pending ? `RM ${row.net.toFixed(2)}` : '—'}
+                                                  </td>
+                                                  <td className={`py-2 text-right font-bold ${row.fairShare > 0 ? 'text-indigo-600' : row.fairShare < 0 ? 'text-red-500' : 'text-gray-300'}`}>
+                                                    {row.fairShare !== 0 ? `RM ${row.fairShare.toFixed(2)}` : '—'}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                            <tfoot>
+                                              <tr className="border-t-2 border-indigo-300 font-semibold text-xs">
+                                                <td colSpan={2} className="py-2 text-gray-700">{history.length} IPOs · {history.filter(r=>r.gotAllocation).length} wins</td>
+                                                <td className="py-2 pr-4 text-right text-gray-700">RM {history.reduce((s,r)=>s+r.capitalIn,0).toLocaleString()}</td>
+                                                <td className="py-2 pr-4 text-right text-gray-500">{history.reduce((s,r)=>s+r.lotsApplied,0)}</td>
+                                                <td className="py-2 pr-4 text-center text-gray-500">{history.filter(r=>r.gotAllocation&&!r.pending).length} allocated</td>
+                                                <td className={`py-2 pr-4 text-right ${totalNet>=0?'text-green-600':'text-red-600'}`}>RM {totalNet.toFixed(2)}</td>
+                                                <td className={`py-2 text-right ${totalFs>=0?'text-indigo-600':'text-red-600'}`}>RM {totalFs.toFixed(2)}</td>
+                                              </tr>
+                                              <tr className="text-xs">
+                                                <td colSpan={5} className="py-1.5 text-gray-500 italic">Balance (Fair Share − Cash Pocketed)</td>
+                                                <td colSpan={2} className={`py-1.5 text-right font-bold ${(totalFs-totalNet)>=0?'text-green-600':'text-red-600'}`}>
+                                                  {(totalFs-totalNet)>=0?'Receive':'Pay'} RM {Math.abs(totalFs-totalNet).toFixed(2)}
+                                                </td>
+                                              </tr>
+                                            </tfoot>
+                                          </table>
+                                        </td>
+                                      </tr>
+                                    );
+                                  }
+                                  return result;
                                 });
                             })()}
                           </tbody>
@@ -1835,10 +1989,30 @@ You can paste multiple IPOs at once!`}
                         </div>
                       </div>
                       <div className="space-y-2">
-                        {savedProjects
-                          .filter(p => p && p.ipoDetails && p.ipoDetails.name && p.ipoDetails.ipoPrice)
-                          .filter(p => !ipoSearch.trim() || p.ipoDetails.name.toLowerCase().includes(ipoSearch.trim().toLowerCase()))
-                          .map((project, projectIdx) => {
+                        {(() => {
+                          const _monthMap = {'jan':'01','januari':'01','january':'01','feb':'02','februari':'02','february':'02','mar':'03','mac':'03','march':'03','apr':'04','april':'04','may':'05','mei':'05','jun':'06','june':'06','jul':'07','july':'07','aug':'08','ogos':'08','august':'08','sep':'09','sept':'09','september':'09','oct':'10','okt':'10','oktober':'10','october':'10','nov':'11','november':'11','dec':'12','dis':'12','disember':'12','december':'12'};
+                          const _parseDK = (ds) => {
+                            if (!ds) return 0;
+                            if (/^\d{4}-\d{2}-\d{2}/.test(ds)) return new Date(ds).getTime();
+                            const m = ds.match(/(\d{1,2})\s+(\w+)\s+(\d{4})/i);
+                            if (m) { const mo = _monthMap[m[2].toLowerCase()] || '01'; return new Date(`${m[3]}-${mo}-${m[1].padStart(2,'0')}`).getTime(); }
+                            return 0;
+                          };
+                          const _MN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+                          const _fmtMonth = (ds) => { const ts = _parseDK(ds); if (!ts) return 'Unknown'; const d = new Date(ts); return `${_MN[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
+                          const sorted = savedProjects
+                            .filter(p => p && p.ipoDetails && p.ipoDetails.name && p.ipoDetails.ipoPrice)
+                            .filter(p => !ipoSearch.trim() || p.ipoDetails.name.toLowerCase().includes(ipoSearch.trim().toLowerCase()))
+                            .slice()
+                            .sort((a, b) => _parseDK(a.ipoDetails.applicationDate) - _parseDK(b.ipoDetails.applicationDate));
+                          let _lastMonth = null;
+                          const _items = [];
+                          sorted.forEach((project, projectIdx) => {
+                            const _ml = _fmtMonth(project.ipoDetails.applicationDate);
+                            if (_ml !== _lastMonth) {
+                              _lastMonth = _ml;
+                              _items.push(<div key={`month-${_ml}`} className="flex items-center gap-3 pt-3 pb-1"><span className="text-xs font-semibold text-indigo-500 uppercase tracking-widest whitespace-nowrap">{_ml}</span><div className="flex-1 h-px bg-indigo-100" /></div>);
+                            }
                           const tempIpoDetails = project.ipoDetails;
                           const tempParticipants = project.participants || [];
                           const tempTransfers = project.transfers || [];
@@ -1855,7 +2029,7 @@ You can paste multiple IPOs at once!`}
                               const amt = la * lotSize * sp;
                               fee = Math.max(amt * 0.001, 8) + amt * 0.0003 + Math.max(Math.ceil(amt / 1000), 1);
                             }
-                            return s + la * (sp - ipoPrice) * lotSize - fee;
+                            return s + (sp > 0 ? la * (sp - ipoPrice) * lotSize - fee : 0);
                           }, 0);
 
                           const allocated = tempParticipants.filter(p => p.gotAllocation);
@@ -1865,8 +2039,8 @@ You can paste multiple IPOs at once!`}
                           const isOpen = !!expandedIpos[ipoKey];
                           const toggleIpo = () => setExpandedIpos(prev => ({ ...prev, [ipoKey]: !prev[ipoKey] }));
 
-                          return (
-                            <div key={projectIdx} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                            _items.push(
+                            <div key={project.id || projectIdx} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                               {/* IPO Header (click to expand) */}
                               <button
                                 onClick={toggleIpo}
@@ -1914,7 +2088,7 @@ You can paste multiple IPOs at once!`}
                                       const amt = la * lotSize * sp;
                                       fee = Math.max(amt * 0.001, 8) + amt * 0.0003 + Math.max(Math.ceil(amt / 1000), 1);
                                     }
-                                    const netProfit = la * (sp - ipoPrice) * lotSize - fee;
+                                    const netProfit = sp > 0 ? la * (sp - ipoPrice) * lotSize - fee : 0;
                                     const capUsed = Number(p.lotsApplied || 0) * ipoPrice * lotSize;
                                     const capPct = totalCapUsed > 0 ? (capUsed / totalCapUsed) * 100 : 0;
 
@@ -1942,7 +2116,7 @@ You can paste multiple IPOs at once!`}
                                             const oamt = ola * lotSize * osp;
                                             ofee = Math.max(oamt * 0.001, 8) + oamt * 0.0003 + Math.max(Math.ceil(oamt / 1000), 1);
                                           }
-                                          const onet = ola * (osp - ipoPrice) * lotSize - ofee;
+                                          const onet = osp > 0 ? ola * (osp - ipoPrice) * lotSize - ofee : 0;
                                           fairShare += onet * 0.4 * 0.3;
                                         }
                                       });
@@ -2000,8 +2174,10 @@ You can paste multiple IPOs at once!`}
                               </table>
                               )}
                             </div>
-                          );
-                        })}
+                            );
+                          });
+                          return _items;
+                        })()}
                       </div>
                     </div>
                   </>
@@ -3630,7 +3806,11 @@ You can paste multiple IPOs at once!`}
                         <p className="text-sm text-yellow-700 mb-5">
                           {settlements.length === 0
                             ? "All accounts are already settled — no transfers needed."
-                            : `${settlements.length} transfer${settlements.length > 1 ? "s" : ""} needed to close all ${savedProjects.length} IPOs`}
+                            : `${settlements.length} transfer${settlements.length > 1 ? "s" : ""} needed to close all ${savedProjects.length} IPOs ${
+                                completedSettlements.length > 0
+                                  ? `• ${completedSettlements.length} completed ✓`
+                                  : ""
+                              }`}
                         </p>
 
                         <div className="space-y-3">
@@ -3638,29 +3818,47 @@ You can paste multiple IPOs at once!`}
                             <div className="text-center py-6 text-green-600 font-semibold text-lg">
                               ✅ Nothing to settle!
                             </div>
-                          ) : settlements.map((s, idx) => (
+                          ) : settlements.map((s, idx) => {
+                            const settlementKey = `${s.from}-${s.to}-${s.amount}`;
+                            const isDone = completedSettlements.includes(settlementKey);
+                            return (
                             <div
                               key={idx}
-                              className="flex items-center gap-4 bg-white rounded-xl px-5 py-4 shadow-sm border border-yellow-200"
+                              className={`flex items-center gap-4 rounded-xl px-5 py-4 shadow-sm border transition-all ${
+                                isDone
+                                  ? "bg-green-50 border-green-300 opacity-70"
+                                  : "bg-white border-yellow-200"
+                              }`}
                             >
-                              <div className="w-8 h-8 rounded-full bg-yellow-400 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                              <input
+                                type="checkbox"
+                                checked={isDone}
+                                onChange={() => toggleSettlementDone(settlementKey)}
+                                className="w-5 h-5 cursor-pointer flex-shrink-0"
+                              />
+                              <div className="w-7 h-7 rounded-full bg-yellow-400 text-white flex items-center justify-center font-bold text-xs flex-shrink-0">
                                 {idx + 1}
                               </div>
                               <div className="flex-1 flex items-center gap-2 flex-wrap">
-                                <span className="font-bold text-red-700 text-lg">{s.from}</span>
+                                <span className={`font-bold text-lg ${isDone ? "line-through text-gray-500" : "text-red-700"}`}>{s.from}</span>
                                 <span className="text-gray-400 text-sm">pays</span>
-                                <span className="font-bold text-green-700 text-lg">{s.to}</span>
+                                <span className={`font-bold text-lg ${isDone ? "line-through text-gray-500" : "text-green-700"}`}>{s.to}</span>
                                 {s.relation && (
                                   <span className="text-xs font-medium bg-pink-100 text-pink-700 px-2 py-0.5 rounded-full">
                                     {s.relation}
                                   </span>
                                 )}
                               </div>
-                              <div className="text-2xl font-extrabold text-indigo-700 bg-indigo-50 px-5 py-2 rounded-lg border border-indigo-200">
+                              <div className={`text-2xl font-extrabold px-5 py-2 rounded-lg border ${
+                                isDone
+                                  ? "text-green-700 bg-green-50 border-green-200"
+                                  : "text-indigo-700 bg-indigo-50 border-indigo-200"
+                              }`}>
                                 RM {s.amount.toFixed(2)}
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
 
