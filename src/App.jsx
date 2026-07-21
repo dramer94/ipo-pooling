@@ -3778,43 +3778,59 @@ You can paste multiple IPOs at once!`}
                     best.d.remaining -= best.amt;
                   }
 
+                  // Net out completed transfers so the cards and per-person
+                  // table reflect what's actually still outstanding, not
+                  // just the original fair-share target.
+                  const remainingByName = {};
+                  people.forEach(p => { remainingByName[p.name] = p.settleBalance; });
+                  settlements.forEach(s => {
+                    const key = `${s.from}-${s.to}-${s.amount}`;
+                    if (completedSettlements.includes(key)) {
+                      remainingByName[s.from] = (remainingByName[s.from] || 0) + s.amount;
+                      remainingByName[s.to] = (remainingByName[s.to] || 0) - s.amount;
+                    }
+                  });
+
                   return (
                     <>
                       {/* Net position cards */}
                       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-8">
                         {people
                           .slice()
-                          .sort((a, b) => b.settleBalance - a.settleBalance)
-                          .map(p => (
+                          .sort((a, b) => remainingByName[b.name] - remainingByName[a.name])
+                          .map(p => {
+                            const bal = remainingByName[p.name];
+                            return (
                             <div
                               key={p.name}
                               className={`rounded-xl p-4 text-center border-2 ${
-                                p.settleBalance > 0.01
+                                bal > 0.01
                                   ? "bg-green-50 border-green-400"
-                                  : p.settleBalance < -0.01
+                                  : bal < -0.01
                                   ? "bg-red-50 border-red-400"
                                   : "bg-gray-50 border-gray-300"
                               }`}
                             >
                               <div className="font-bold text-gray-800 text-lg mb-1">{p.name}</div>
                               <div className={`text-2xl font-extrabold ${
-                                p.settleBalance > 0.01 ? "text-green-600"
-                                  : p.settleBalance < -0.01 ? "text-red-600"
+                                bal > 0.01 ? "text-green-600"
+                                  : bal < -0.01 ? "text-red-600"
                                   : "text-gray-500"
                               }`}>
-                                {p.settleBalance > 0.01 ? "+" : ""}RM {p.settleBalance.toFixed(2)}
+                                {bal > 0.01 ? "+" : ""}RM {bal.toFixed(2)}
                               </div>
                               <div className={`text-xs mt-1 font-medium ${
-                                p.settleBalance > 0.01 ? "text-green-500"
-                                  : p.settleBalance < -0.01 ? "text-red-500"
+                                bal > 0.01 ? "text-green-500"
+                                  : bal < -0.01 ? "text-red-500"
                                   : "text-gray-400"
                               }`}>
-                                {p.settleBalance > 0.01 ? "will receive"
-                                  : p.settleBalance < -0.01 ? "needs to pay"
+                                {bal > 0.01 ? "will receive"
+                                  : bal < -0.01 ? "needs to pay"
                                   : "settled"}
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                       </div>
 
                       {/* Transfer instructions */}
@@ -3905,12 +3921,13 @@ You can paste multiple IPOs at once!`}
                             <tbody>
                               {people
                                 .slice()
-                                .sort((a, b) => b.settleBalance - a.settleBalance)
+                                .sort((a, b) => remainingByName[b.name] - remainingByName[a.name])
                                 .map((p, idx) => {
-                                  const action = p.settleBalance > 0.01
-                                    ? { label: `Receive RM ${p.settleBalance.toFixed(2)}`, color: "text-green-600 bg-green-50" }
-                                    : p.settleBalance < -0.01
-                                    ? { label: `Pay RM ${Math.abs(p.settleBalance).toFixed(2)}`, color: "text-red-600 bg-red-50" }
+                                  const bal = remainingByName[p.name];
+                                  const action = bal > 0.01
+                                    ? { label: `Receive RM ${bal.toFixed(2)}`, color: "text-green-600 bg-green-50" }
+                                    : bal < -0.01
+                                    ? { label: `Pay RM ${Math.abs(bal).toFixed(2)}`, color: "text-red-600 bg-red-50" }
                                     : { label: "Settled ✓", color: "text-gray-500 bg-gray-50" };
                                   return (
                                     <tr key={idx} className="border-b hover:bg-gray-50">
@@ -3923,11 +3940,11 @@ You can paste multiple IPOs at once!`}
                                         RM {p.totalProfitShare.toFixed(2)}
                                       </td>
                                       <td className={`px-4 py-3 text-right font-bold text-base ${
-                                        p.settleBalance > 0.01 ? "text-green-600"
-                                          : p.settleBalance < -0.01 ? "text-red-600"
+                                        bal > 0.01 ? "text-green-600"
+                                          : bal < -0.01 ? "text-red-600"
                                           : "text-gray-400"
                                       }`}>
-                                        {p.settleBalance > 0 ? "+" : ""}RM {p.settleBalance.toFixed(2)}
+                                        {bal > 0 ? "+" : ""}RM {bal.toFixed(2)}
                                       </td>
                                       <td className="px-4 py-3 text-right">
                                         <span className={`px-3 py-1 rounded-full text-xs font-bold ${action.color}`}>
