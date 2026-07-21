@@ -3830,12 +3830,6 @@ You can paste multiple IPOs at once!`}
                                   : "bg-white border-yellow-200"
                               }`}
                             >
-                              <input
-                                type="checkbox"
-                                checked={isDone}
-                                onChange={() => toggleSettlementDone(settlementKey)}
-                                className="w-5 h-5 cursor-pointer flex-shrink-0"
-                              />
                               <div className="w-7 h-7 rounded-full bg-yellow-400 text-white flex items-center justify-center font-bold text-xs flex-shrink-0">
                                 {idx + 1}
                               </div>
@@ -3856,6 +3850,16 @@ You can paste multiple IPOs at once!`}
                               }`}>
                                 RM {s.amount.toFixed(2)}
                               </div>
+                              <button
+                                onClick={() => toggleSettlementDone(settlementKey)}
+                                className={`px-4 py-2 rounded-lg font-bold text-sm flex-shrink-0 transition-all ${
+                                  isDone
+                                    ? "bg-green-500 text-white hover:bg-green-600"
+                                    : "bg-orange-500 text-white hover:bg-orange-600"
+                                }`}
+                              >
+                                {isDone ? "✓ Done" : "Mark Done"}
+                              </button>
                             </div>
                             );
                           })}
