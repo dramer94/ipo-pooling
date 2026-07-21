@@ -4232,9 +4232,9 @@ You can paste multiple IPOs at once!`}
                               </div>
                               <button
                                 onClick={() => undoSettlementPayment(r.id)}
-                                className="px-4 py-2 rounded-lg font-bold text-sm flex-shrink-0 transition-all bg-green-500 text-white hover:bg-green-600"
+                                className="px-4 py-2 rounded-lg font-bold text-sm flex-shrink-0 transition-all bg-gray-500 text-white hover:bg-gray-600"
                               >
-                                ✓ Done
+                                ↩ Undo
                               </button>
                             </div>
                           ))}
