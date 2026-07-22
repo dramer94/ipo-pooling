@@ -139,6 +139,7 @@ export default function IPOPoolManager() {
   const [settlementSubTab, setSettlementSubTab] = useState("current");
   const [settlementsScope, setSettlementsScope] = useState("all");
   const [selectedIpoForBreakdown, setSelectedIpoForBreakdown] = useState(null);
+  const [showFullMemberHistory, setShowFullMemberHistory] = useState(false);
 
   // Real admin auth via Supabase (works with Row Level Security). Single
   // shared account; the login box only asks for the password, email is fixed.
@@ -360,10 +361,14 @@ export default function IPOPoolManager() {
     setIsLoading(true);
 
     try {
+      // Stamp when this IPO's data last changed so the Settlements "recent
+      // activity" view can tell freshly-edited IPOs apart from untouched
+      // ones, without needing a schema migration for a real updated_at column.
+      const stampedIpoDetails = { ...ipoDetails, updatedAt: new Date().toISOString() };
       const projectData = {
         id: currentProjectId || crypto.randomUUID(),
         savedDate: new Date().toISOString(),
-        ipoDetails,
+        ipoDetails: stampedIpoDetails,
         participants,
         transfers,
       };
@@ -548,6 +553,10 @@ export default function IPOPoolManager() {
             from: beforeAmount.slice(0, sep),
             to: beforeAmount.slice(sep + 1),
             amount: Number(r.slice(idx + 1)),
+            // Original timestamp unknown — treat as settled as of now rather
+            // than leaving it undefined (which the "recent activity" filter
+            // would otherwise treat as "never settled").
+            createdAt: new Date().toISOString(),
           };
         }
         return r;
@@ -729,7 +738,7 @@ export default function IPOPoolManager() {
   // IPO data changes the underlying balances. The ledger is netted against
   // fresh balances on every render instead (see the Settlements tab).
   const recordSettlementPayment = async (from, to, amount) => {
-    const entry = { id: crypto.randomUUID(), from, to, amount };
+    const entry = { id: crypto.randomUUID(), from, to, amount, createdAt: new Date().toISOString() };
     const updated = [...completedSettlements, entry];
     setCompletedSettlements(updated);
     try {
@@ -1535,10 +1544,19 @@ export default function IPOPoolManager() {
             fairShare += net * 0.4 * 0.3;
           }
         }
-        rows.push({ ipoName: d.name, date: d.applicationDate, capitalIn: Number(p.initialCapital||0), lotsApplied: Number(p.lotsApplied||0), gotAllocation: !!p.gotAllocation, lotsAllocated: la, sellingPrice: sp, net, fairShare, pending: p.gotAllocation && sp===0 });
+        rows.push({ ipoName: d.name, date: d.applicationDate, updatedAt: d.updatedAt ? new Date(d.updatedAt).getTime() : 0, capitalIn: Number(p.initialCapital||0), lotsApplied: Number(p.lotsApplied||0), gotAllocation: !!p.gotAllocation, lotsAllocated: la, sellingPrice: sp, net, fairShare, pending: p.gotAllocation && sp===0 });
       });
     });
     return rows.sort((a,b) => parseIpoDateKey(a.date)-parseIpoDateKey(b.date));
+  };
+
+  // Latest time this person's balance was reconciled via a real payment
+  // (either side of the transfer) — 0 if never settled.
+  const getPersonLastSettledAt = (name) => {
+    const times = completedSettlements
+      .filter((r) => r.from === name || r.to === name)
+      .map((r) => (r.createdAt ? new Date(r.createdAt).getTime() : 0));
+    return times.length ? Math.max(...times) : 0;
   };
 
   const distribution = calculateDistribution();
@@ -4132,7 +4150,10 @@ You can paste multiple IPOs at once!`}
                             return (
                             <div
                               key={p.name}
-                              onClick={() => setExpandedMember(isOpen ? null : p.name)}
+                              onClick={() => {
+                                setExpandedMember(isOpen ? null : p.name);
+                                setShowFullMemberHistory(false);
+                              }}
                               className={`rounded-xl p-4 text-center border-2 cursor-pointer transition-all ${
                                 isOpen
                                   ? "ring-2 ring-indigo-400 ring-offset-1"
@@ -4170,12 +4191,41 @@ You can paste multiple IPOs at once!`}
                           })}
                       </div>
 
-                      {expandedMember && (
-                        <div className="bg-indigo-50 border-2 border-indigo-200 rounded-xl px-5 py-4 mb-8 overflow-x-auto">
-                          <h4 className="font-bold text-indigo-900 text-sm mb-2">{expandedMember}'s IPO breakdown</h4>
-                          <MemberIpoHistoryTable history={getMemberIpoHistory(expandedMember)} />
-                        </div>
-                      )}
+                      {expandedMember && (() => {
+                        const fullHistory = getMemberIpoHistory(expandedMember);
+                        const lastSettledAt = getPersonLastSettledAt(expandedMember);
+                        const recentHistory = fullHistory.filter((r) => r.updatedAt > lastSettledAt);
+                        const hasRecent = recentHistory.length > 0;
+                        const showingFull = showFullMemberHistory || !hasRecent;
+                        const shown = showingFull ? fullHistory : recentHistory;
+                        return (
+                          <div className="bg-indigo-50 border-2 border-indigo-200 rounded-xl px-5 py-4 mb-8 overflow-x-auto">
+                            <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                              <h4 className="font-bold text-indigo-900 text-sm">
+                                {expandedMember}'s {showingFull ? "full IPO history" : "recent settlement activity"}
+                              </h4>
+                              {hasRecent && (
+                                <button
+                                  onClick={() => setShowFullMemberHistory(!showingFull)}
+                                  className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 underline"
+                                >
+                                  {showingFull
+                                    ? `Show recent only (${recentHistory.length})`
+                                    : `Show full history (${fullHistory.length} IPOs)`}
+                                </button>
+                              )}
+                            </div>
+                            {!hasRecent && (
+                              <p className="text-xs text-gray-500 mb-2">
+                                {lastSettledAt > 0
+                                  ? `✅ No IPO changes since ${expandedMember}'s last recorded payment — showing full history since there's nothing newer to isolate.`
+                                  : `Showing full history — no payments recorded yet for ${expandedMember}.`}
+                              </p>
+                            )}
+                            <MemberIpoHistoryTable history={shown} />
+                          </div>
+                        );
+                      })()}
 
                       {/* Transfer instructions */}
                       <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-400 rounded-xl p-6 mb-6">
